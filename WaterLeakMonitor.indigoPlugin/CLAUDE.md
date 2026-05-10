@@ -25,7 +25,8 @@ Indigo plugin for monitoring water leak sensors and freezer lid status with Push
 ### Pushover Integration
 ```python
 # Correct method to send Pushover notifications
-pushover_plugin = indigo.server.getPlugin('com.bot.indigoplugin.pushover')
+pushover_plugin = indigo.server.getPlugin('io.thechad.indigoplugin.pushover')
+# Bundle ID: com.clives.indigoplugin.waterleakmonitor (changed from com.highsteads in v1.5)
 if pushover_plugin.isEnabled():
     # Use proper Pushover API - DO NOT GUESS method names!
     # Check existing code for correct API calls
