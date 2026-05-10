@@ -21,7 +21,7 @@ except ImportError:
 
 _sys.path.insert(0, "/Library/Application Support/Perceptive Automation")
 try:
-    from secrets import PUSHOVER_USER_TOKEN
+    from IndigoSecrets import PUSHOVER_USER_TOKEN
 except ImportError:
     PUSHOVER_USER_TOKEN = ""   # Falls back to hardcoded value below if missing
 

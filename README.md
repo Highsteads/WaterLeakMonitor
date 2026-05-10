@@ -40,15 +40,15 @@ EMAIL_SUBJECT   = "[URGENT ALERT] Water Leak Detected"
 This plugin uses **Pushover** for push notifications. The Pushover user token is loaded
 from the master secrets file:
 
-`/Library/Application Support/Perceptive Automation/secrets.py`
+`/Library/Application Support/Perceptive Automation/IndigoSecrets.py`
 
-Copy the relevant line from `Contents/Server Plugin/secrets_example.py` into that file:
+Copy the relevant line from `Contents/Server Plugin/IndigoSecrets_example.py` into that file:
 
 ```python
 PUSHOVER_USER_TOKEN = "your-pushover-user-token-here"
 ```
 
-If `secrets.py` is not present, the token falls back to an empty string and Pushover
+If `IndigoSecrets.py` is not present, the token falls back to an empty string and Pushover
 alerts will be skipped (email will still be sent).
 
 ## Author
