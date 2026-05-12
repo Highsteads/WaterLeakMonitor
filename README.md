@@ -14,10 +14,13 @@ Pushover and email alerts with confirmation retests to avoid false alarms.
 
 ## Requirements
 
-- Indigo 2021.2 or later (macOS, arm64/x86_64)
+- Indigo 2022.1 or later (Python 3.10+ bundled with Indigo)
+- macOS (arm64 or x86_64)
 - A water leak sensor device visible in Indigo (Zigbee, Z-Wave, etc.)
 - [Pushover plugin for Indigo](https://www.indigodomo.com/pluginstore/) (io.thechad.indigoplugin.pushover)
-- Email+ plugin (bundled with Indigo 2021.2+)
+- Email+ plugin (bundled with Indigo)
+
+*Developed and tested on Indigo 2025.2 / Python 3.13. Older Indigo releases that meet the minimum API version above should also work — the API floor is what Indigo's plugin loader actually checks.*
 
 ## Installation
 
