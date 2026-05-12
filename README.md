@@ -35,22 +35,26 @@ EMAIL_TO        = "your-alert@example.com"
 EMAIL_SUBJECT   = "[URGENT ALERT] Water Leak Detected"
 ```
 
-## Credentials
+## Credentials — `IndigoSecrets.py` vs `IndigoSecrets_example.py`
 
-This plugin uses **Pushover** for push notifications. The Pushover user token is loaded
-from the master secrets file:
+This plugin (along with all CliveS Indigo plugins) reads sensitive values from
+a shared master credentials file at:
 
 `/Library/Application Support/Perceptive Automation/IndigoSecrets.py`
 
-Copy the relevant line from `Contents/Server Plugin/IndigoSecrets_example.py` into that file:
+| File | Purpose | Real data? | Committed to GitHub? |
+|------|---------|------------|----------------------|
+| `IndigoSecrets.py` | Working file the plugin reads at runtime. Keep a backup in a password manager. | YES | **NO** — listed in `.gitignore` |
+| `IndigoSecrets_example.py` | Template only — empty placeholders. Shipped in the plugin bundle. | NO | YES |
 
-```python
-PUSHOVER_USER_TOKEN = "your-pushover-user-token-here"
-```
+If you do not have `IndigoSecrets.py`, copy `IndigoSecrets_example.py` from
+the plugin bundle to that location and fill in your values. Or skip
+`IndigoSecrets.py` entirely and enter values via the plugin's configuration
+dialog — `IndigoSecrets.py` wins over the dialog when both are set.
 
-If `IndigoSecrets.py` is not present, the token falls back to an empty string and Pushover
-alerts will be skipped (email will still be sent).
-
+If a required value is set in NEITHER source the plugin logs an ERROR
+pointing the user to either fill in the matching field or add the key to
+`IndigoSecrets.py`.
 ## Author
 
 CliveS & Claude Sonnet 4.6
