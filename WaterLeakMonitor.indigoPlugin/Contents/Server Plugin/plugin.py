@@ -5,8 +5,17 @@
 #              Pushover + Email alerts with confirmation retests to avoid
 #              false alarms.
 # Author:      CliveS & Claude Sonnet 4.6
-# Date:        09-04-2026
-# Version:     1.4
+# Date:        13-05-2026
+# Version:     1.5
+#
+# v1.5 (13-05-2026):
+# - Alert email moved to IndigoSecrets.py (WATERLEAK_ALERT_EMAIL) with
+#   PluginConfig fallback. No more hardcoded email address.
+# - Leak sensor ID moved to PluginConfig (was a module constant — broke
+#   plugin for anyone with a different sensor ID).
+# - Drop unused PUSHOVER_USER_TOKEN import (msgUser is optional when only one
+#   Pushover user is configured, and we never passed it anyway).
+# - Add PluginConfig.xml so users can configure without editing source.
 
 import indigo
 import os as _os
@@ -21,18 +30,16 @@ except ImportError:
 
 _sys.path.insert(0, "/Library/Application Support/Perceptive Automation")
 try:
-    from IndigoSecrets import PUSHOVER_USER_TOKEN
+    from IndigoSecrets import WATERLEAK_ALERT_EMAIL as _SECRETS_EMAIL
 except ImportError:
-    PUSHOVER_USER_TOKEN = ""   # Falls back to hardcoded value below if missing
+    _SECRETS_EMAIL = ""
 
 # ================================
-# CONFIGURATION
+# CONFIGURATION (defaults — overridden by PluginConfig / IndigoSecrets)
 # ================================
 
-LEAK_SENSOR_ID      = 5913615   # "Bathroom Boiler Leak Sensor"
-
-EMAIL_TO            = "boiler-leak-alert@strudwick.co.uk"
-EMAIL_SUBJECT       = "[URGENT ALERT] Bathroom Boiler Water Leak Detected"
+DEFAULT_LEAK_SENSOR_ID = 5913615   # "Bathroom Boiler Leak Sensor"
+DEFAULT_EMAIL_SUBJECT  = "[URGENT ALERT] Bathroom Boiler Water Leak Detected"
 
 PUSHOVER_PLUGIN_ID  = "io.thechad.indigoplugin.pushover"
 
@@ -44,9 +51,20 @@ QUICK_RETEST_COUNT  = 1     # single retest (1 x 5s = 5s confirmation window)
 class Plugin(indigo.PluginBase):
     def __init__(self, pluginId, pluginDisplayName, pluginVersion, pluginPrefs):
         super(Plugin, self).__init__(pluginId, pluginDisplayName, pluginVersion, pluginPrefs)
-        self.debug            = pluginPrefs.get("showDebugInfo", False)
+        self.debug             = pluginPrefs.get("showDebugInfo", False)
         self.last_sensor_state = None
-        self.alert_sent       = False
+        self.alert_sent        = False
+
+        # Resolve config: IndigoSecrets first, then PluginConfig, then default.
+        self.leak_sensor_id = int(pluginPrefs.get("leakSensorId", DEFAULT_LEAK_SENSOR_ID) or DEFAULT_LEAK_SENSOR_ID)
+        self.email_to       = _SECRETS_EMAIL or pluginPrefs.get("alertEmail", "")
+        self.email_subject  = pluginPrefs.get("alertSubject", "") or DEFAULT_EMAIL_SUBJECT
+
+        if not self.email_to:
+            self.logger.error(
+                "No alert email configured. Set WATERLEAK_ALERT_EMAIL in IndigoSecrets.py "
+                "OR fill in the Alert Email field via Plugins -> Water Leak Monitor -> Configure."
+            )
 
         if log_startup_banner:
             log_startup_banner(pluginId, pluginDisplayName, pluginVersion)
@@ -54,11 +72,21 @@ class Plugin(indigo.PluginBase):
             indigo.server.log(f"{pluginDisplayName} v{pluginVersion} starting")
 
     def startup(self):
-        self.logger.info(f"Water Leak Monitor started — sensor ID: {LEAK_SENSOR_ID}")
+        self.logger.info(f"Water Leak Monitor started — sensor ID: {self.leak_sensor_id}")
         self.logger.info(f"Poll interval: {POLL_INTERVAL}s | Retests: {QUICK_RETEST_COUNT} x {QUICK_RETEST_DELAY}s")
+        self.logger.info(f"Alert email: {self.email_to or '(not set)'}")
 
     def shutdown(self):
         self.logger.info("Water Leak Monitor stopped")
+
+    def closedPrefsConfigUi(self, valuesDict, userCancelled):
+        if userCancelled:
+            return
+        self.debug          = valuesDict.get("showDebugInfo", False)
+        self.leak_sensor_id = int(valuesDict.get("leakSensorId", DEFAULT_LEAK_SENSOR_ID) or DEFAULT_LEAK_SENSOR_ID)
+        self.email_to       = _SECRETS_EMAIL or valuesDict.get("alertEmail", "")
+        self.email_subject  = valuesDict.get("alertSubject", "") or DEFAULT_EMAIL_SUBJECT
+        self.logger.info("Plugin configuration updated")
 
     def runConcurrentThread(self):
         try:
@@ -75,9 +103,9 @@ class Plugin(indigo.PluginBase):
     def _check_leak_sensor(self):
         """Check sensor state and trigger confirmation if leak detected."""
         try:
-            sensor = indigo.devices[LEAK_SENSOR_ID]
+            sensor = indigo.devices[self.leak_sensor_id]
         except KeyError:
-            self.logger.error(f"Leak sensor not found (ID: {LEAK_SENSOR_ID})")
+            self.logger.error(f"Leak sensor not found (ID: {self.leak_sensor_id})")
             return
 
         if hasattr(sensor, "errorState") and sensor.errorState:
@@ -106,7 +134,7 @@ class Plugin(indigo.PluginBase):
             self.sleep(QUICK_RETEST_DELAY)
 
             try:
-                sensor = indigo.devices[LEAK_SENSOR_ID]
+                sensor = indigo.devices[self.leak_sensor_id]
                 if hasattr(sensor, "errorState") and sensor.errorState:
                     self.logger.info(f"Sensor unavailable on retest {test_num} — cancelling")
                     return False
@@ -138,13 +166,16 @@ class Plugin(indigo.PluginBase):
 
     def _send_email(self, timestamp):
         """Send alert via indigo.server.sendEmailTo (uses first SMTP device)."""
+        if not self.email_to:
+            self.logger.error("Cannot send leak alert email — no recipient configured")
+            return
         try:
             body = (
                 f"LEAK DETECTED at Bathroom Boiler\n"
                 f"Time: {timestamp}\n"
                 f"Status: ACTIVE"
             )
-            indigo.server.sendEmailTo(EMAIL_TO, subject=EMAIL_SUBJECT, body=body)
+            indigo.server.sendEmailTo(self.email_to, subject=self.email_subject, body=body)
             self.logger.info("[OK] Email alert sent")
         except Exception as exc:
             self.logger.error(f"Failed to send email: {exc}")

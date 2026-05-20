@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<PluginConfig>
+
+    <Field type="label" id="lblHeader">
+        <Label>Water Leak Monitor — settings are read from IndigoSecrets.py first (where applicable). The fields below are a fallback for users without IndigoSecrets.py.</Label>
+    </Field>
+
+    <Field type="separator" id="sep1"/>
+
+    <Field type="textfield" id="leakSensorId" defaultValue="5913615">
+        <Label>Leak Sensor Device ID:</Label>
+        <Description>Indigo device ID of the water leak sensor to monitor.</Description>
+    </Field>
+
+    <Field type="textfield" id="alertEmail" defaultValue="">
+        <Label>Alert Email Address:</Label>
+        <Description>Fallback recipient for leak-alert emails. Used only if WATERLEAK_ALERT_EMAIL is missing from IndigoSecrets.py.</Description>
+    </Field>
+
+    <Field type="textfield" id="alertSubject" defaultValue="[URGENT ALERT] Bathroom Boiler Water Leak Detected">
+        <Label>Email Subject:</Label>
+    </Field>
+
+    <Field type="separator" id="sep2"/>
+
+    <Field type="checkbox" id="showDebugInfo" defaultValue="false">
+        <Label>Enable Debug Logging:</Label>
+    </Field>
+
+</PluginConfig>
