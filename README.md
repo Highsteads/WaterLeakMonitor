@@ -58,6 +58,20 @@ dialog — `IndigoSecrets.py` wins over the dialog when both are set.
 If a required value is set in NEITHER source the plugin logs an ERROR
 pointing the user to either fill in the matching field or add the key to
 `IndigoSecrets.py`.
+
+## Logging
+
+Every log line is prefixed with a millisecond timestamp `[HH:MM:SS.mmm]` so
+events can be correlated tightly with other CliveS plugins (Device Activity
+Monitor uses the same convention).
+
+To turn the prefix off (or back on) at any time:
+
+**Plugins → Water Leak Monitor → Toggle Timestamps in Log (on/off)**
+
+The setting is stored in `pluginPrefs` (`timestampEnabled`) and persists across
+restarts. Defaults to ON.
+
 ## Author
 
-CliveS & Claude Sonnet 4.6
+CliveS & Claude Opus 4.7

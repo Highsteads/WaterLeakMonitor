@@ -4,9 +4,18 @@
 # Description: Water Leak Monitor - monitors water leak sensors and sends
 #              Pushover + Email alerts with confirmation retests to avoid
 #              false alarms.
-# Author:      CliveS & Claude Sonnet 4.6
-# Date:        13-05-2026
-# Version:     1.5
+# Author:      CliveS & Claude Opus 4.7
+# Date:        23-05-2026
+# Version:     1.6
+#
+# v1.6 (23-05-2026):
+# - Add millisecond timestamp prefix [HH:MM:SS.mmm] on every log line, matching
+#   Device Activity Monitor convention. Driven by a MillisecondTimestampFilter
+#   installed on self.logger via plugin_utils.install_timestamp_filter().
+# - New menu item "Toggle Timestamps in Log (on/off)" — flips the
+#   timestampEnabled pluginPref live. Default ON so existing installs are
+#   unchanged in feel but gain millisecond precision.
+# - showPluginInfo now reports Timestamps state alongside the standard banner.
 #
 # v1.5 (13-05-2026):
 # - Alert email moved to IndigoSecrets.py (WATERLEAK_ALERT_EMAIL) with
@@ -27,6 +36,10 @@ try:
     from plugin_utils import log_startup_banner
 except ImportError:
     log_startup_banner = None
+try:
+    from plugin_utils import install_timestamp_filter
+except ImportError:
+    install_timestamp_filter = None
 
 _sys.path.insert(0, "/Library/Application Support/Perceptive Automation")
 try:
@@ -54,6 +67,12 @@ class Plugin(indigo.PluginBase):
         self.debug             = pluginPrefs.get("showDebugInfo", False)
         self.last_sensor_state = None
         self.alert_sent        = False
+        self.timestamp_enabled = bool(pluginPrefs.get("timestampEnabled", True))
+
+        if install_timestamp_filter:
+            self._ts_filter = install_timestamp_filter(self, enabled=self.timestamp_enabled)
+        else:
+            self._ts_filter = None
 
         # Resolve config: IndigoSecrets first, then PluginConfig, then default.
         self.leak_sensor_id = int(pluginPrefs.get("leakSensorId", DEFAULT_LEAK_SENSOR_ID) or DEFAULT_LEAK_SENSOR_ID)
@@ -202,7 +221,20 @@ class Plugin(indigo.PluginBase):
     # ----------------------------------------------------------------
 
     def showPluginInfo(self, valuesDict=None, typeId=None):
+        extras = [
+            ("Timestamps in Log:", "ON" if self.timestamp_enabled else "OFF"),
+        ]
         if log_startup_banner:
-            log_startup_banner(self.pluginId, self.pluginDisplayName, self.pluginVersion)
+            log_startup_banner(self.pluginId, self.pluginDisplayName, self.pluginVersion, extras=extras)
         else:
             indigo.server.log(f"{self.pluginDisplayName} v{self.pluginVersion}")
+            for label, value in extras:
+                indigo.server.log(f"  {label} {value}")
+
+    def menuToggleTimestamps(self):
+        self.timestamp_enabled = not self.timestamp_enabled
+        self.pluginPrefs["timestampEnabled"] = self.timestamp_enabled
+        if self._ts_filter:
+            self._ts_filter.enabled = self.timestamp_enabled
+        state = "ON" if self.timestamp_enabled else "OFF"
+        indigo.server.log(f"[{self.pluginDisplayName}] Timestamps in Log -> {state}")
