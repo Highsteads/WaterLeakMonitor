@@ -6,7 +6,7 @@
 #              false alarms.
 # Author:      CliveS & Claude Opus 4.7
 # Date:        23-05-2026
-# Version:     1.6
+# Version:     1.7
 #
 # v1.6 (23-05-2026):
 # - Add millisecond timestamp prefix [HH:MM:SS.mmm] on every log line, matching
@@ -54,6 +54,14 @@ except ImportError:
 DEFAULT_LEAK_SENSOR_ID = 5913615   # "Bathroom Boiler Leak Sensor"
 DEFAULT_EMAIL_SUBJECT  = "[URGENT ALERT] Bathroom Boiler Water Leak Detected"
 
+
+def _as_int(value, default):
+    """Coerce a config value to int, returning default on blank/non-numeric input."""
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return default
+
 PUSHOVER_PLUGIN_ID  = "io.thechad.indigoplugin.pushover"
 
 POLL_INTERVAL       = 2.0   # seconds between sensor checks
@@ -75,7 +83,7 @@ class Plugin(indigo.PluginBase):
             self._ts_filter = None
 
         # Resolve config: IndigoSecrets first, then PluginConfig, then default.
-        self.leak_sensor_id = int(pluginPrefs.get("leakSensorId", DEFAULT_LEAK_SENSOR_ID) or DEFAULT_LEAK_SENSOR_ID)
+        self.leak_sensor_id = _as_int(pluginPrefs.get("leakSensorId"), DEFAULT_LEAK_SENSOR_ID)
         self.email_to       = _SECRETS_EMAIL or pluginPrefs.get("alertEmail", "")
         self.email_subject  = pluginPrefs.get("alertSubject", "") or DEFAULT_EMAIL_SUBJECT
 
@@ -99,7 +107,7 @@ class Plugin(indigo.PluginBase):
         if userCancelled:
             return
         self.debug          = valuesDict.get("showDebugInfo", False)
-        self.leak_sensor_id = int(valuesDict.get("leakSensorId", DEFAULT_LEAK_SENSOR_ID) or DEFAULT_LEAK_SENSOR_ID)
+        self.leak_sensor_id = _as_int(valuesDict.get("leakSensorId"), DEFAULT_LEAK_SENSOR_ID)
         self.email_to       = _SECRETS_EMAIL or valuesDict.get("alertEmail", "")
         self.email_subject  = valuesDict.get("alertSubject", "") or DEFAULT_EMAIL_SUBJECT
         self.logger.info("Plugin configuration updated")
