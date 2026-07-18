@@ -4,9 +4,29 @@
 # Description: Water Leak Monitor - monitors water leak sensors and sends
 #              Pushover + Email alerts with confirmation retests to avoid
 #              false alarms.
-# Author:      CliveS & Claude Opus 4.7
-# Date:        23-05-2026
-# Version:     1.7
+# Author:      CliveS & Claude Opus 4.8
+# Date:        18-07-2026
+# Version:     1.8
+#
+# v1.8 (18-07-2026) — deep-review SAFETY-FIX batch:
+# - CRITICAL: a CONFIRMED leak whose alert could not be delivered is no longer
+#   silently latched as "alerted". _send_email / _send_pushover now return a
+#   delivery-success bool, _send_alerts returns True only if at least one
+#   channel delivered, and alert_sent latches only on that success. A confirmed
+#   leak with a mail/Pushover outage keeps retrying (bounded back-off,
+#   ALERT_RETRY_BACKOFF) and logs a loud ERROR, so a real leak is never dropped.
+# - The runConcurrentThread tick body is fully isolated: an unexpected exception
+#   is logged and the loop continues (previously only the device lookup was
+#   guarded, so a stray error would silently stop leak monitoring for good).
+# - The confirmation retest no longer permanently misses a leak that flickers
+#   clear during the 5s window — while the sensor still reads active and no
+#   alert has been delivered, it re-confirms and re-attempts.
+# - New _leak_state reader: prefers the Zigbee2MQTT "waterLeak" state but falls
+#   back to the native onOffState, so Z-Wave (and other) leak sensors that
+#   expose only onOffState are monitored too (they were silently unwatched).
+# - Alert body + Pushover message now name the ACTUAL configured sensor instead
+#   of the hardcoded "Bathroom Boiler".
+# - First-ever test suite: test_plugin.py, 14 tests.
 #
 # v1.6 (23-05-2026):
 # - Add millisecond timestamp prefix [HH:MM:SS.mmm] on every log line, matching
@@ -29,6 +49,7 @@
 import indigo
 import os as _os
 import sys as _sys
+import time as _time
 from datetime import datetime
 
 _sys.path.insert(0, _os.getcwd())
@@ -67,6 +88,10 @@ PUSHOVER_PLUGIN_ID  = "io.thechad.indigoplugin.pushover"
 POLL_INTERVAL       = 2.0   # seconds between sensor checks
 QUICK_RETEST_DELAY  = 5     # seconds before confirmation retest
 QUICK_RETEST_COUNT  = 1     # single retest (1 x 5s = 5s confirmation window)
+ALERT_RETRY_BACKOFF = 60    # seconds between delivery retries when a CONFIRMED
+                            # leak's alert could not be delivered (SMTP/Pushover
+                            # down) — keep trying so a real leak is never silently
+                            # dropped, without hammering the channels every tick.
 
 
 class Plugin(indigo.PluginBase):
@@ -74,7 +99,8 @@ class Plugin(indigo.PluginBase):
         super(Plugin, self).__init__(pluginId, pluginDisplayName, pluginVersion, pluginPrefs)
         self.debug             = pluginPrefs.get("showDebugInfo", False)
         self.last_sensor_state = None
-        self.alert_sent        = False
+        self.alert_sent        = False   # True only once an alert has been DELIVERED
+        self._alert_retry_at   = 0.0     # monotonic time of the next delivery retry
         self.timestamp_enabled = bool(pluginPrefs.get("timestampEnabled", True))
 
         if install_timestamp_filter:
@@ -115,7 +141,14 @@ class Plugin(indigo.PluginBase):
     def runConcurrentThread(self):
         try:
             while True:
-                self._check_leak_sensor()
+                # Isolate the whole tick: an unexpected exception must NOT kill
+                # the monitor thread (that would stop leak detection silently).
+                try:
+                    self._check_leak_sensor()
+                except self.StopThread:
+                    raise
+                except Exception as exc:
+                    self.logger.error(f"Leak-check tick failed: {exc}", exc_info=True)
                 self.sleep(POLL_INTERVAL)
         except self.StopThread:
             pass
@@ -124,28 +157,59 @@ class Plugin(indigo.PluginBase):
     # Sensor monitoring
     # ----------------------------------------------------------------
 
+    def _leak_state(self, sensor):
+        """Read the sensor's leak state. Prefers the Zigbee2MQTT 'waterLeak'
+        state; falls back to the native onOffState so Z-Wave and other leak
+        sensors (which expose only onOffState) are monitored too."""
+        if "waterLeak" in sensor.states:
+            return bool(sensor.states.get("waterLeak", False))
+        return bool(getattr(sensor, "onState", sensor.states.get("onOffState", False)))
+
     def _check_leak_sensor(self):
-        """Check sensor state and trigger confirmation if leak detected."""
+        """Check sensor state; confirm + alert on a leak, retrying delivery if
+        a confirmed alert could not be sent."""
         try:
             sensor = indigo.devices[self.leak_sensor_id]
         except KeyError:
             self.logger.error(f"Leak sensor not found (ID: {self.leak_sensor_id})")
             return
 
-        if hasattr(sensor, "errorState") and sensor.errorState:
-            if self.alert_sent:
-                self.logger.debug("Sensor unavailable — resetting alert flag")
-                self.alert_sent = False
+        if getattr(sensor, "errorState", None):
+            if self.alert_sent or self.last_sensor_state:
+                self.logger.debug("Sensor unavailable — resetting leak state")
+            self.alert_sent        = False
+            self.last_sensor_state = None
             return
 
-        current_state = sensor.states.get("waterLeak", False)
+        current_state = self._leak_state(sensor)
 
-        if current_state and not self.last_sensor_state and not self.alert_sent:
-            self.logger.warning("[!] LEAK DETECTED — starting confirmation process")
-            self._confirm_and_alert()
-        elif not current_state and self.last_sensor_state:
-            self.logger.info("Leak sensor cleared")
-            self.alert_sent = False
+        if not current_state:
+            if self.last_sensor_state:
+                self.logger.info("Leak sensor cleared")
+            self.alert_sent        = False
+            self._alert_retry_at   = 0.0
+            self.last_sensor_state = False
+            return
+
+        # Leak is currently active. Attempt to alert until an alert is actually
+        # DELIVERED (alert_sent). This covers both first detection and retrying
+        # a confirmed leak whose delivery failed — a real leak is never dropped.
+        if not self.alert_sent and _time.monotonic() >= self._alert_retry_at:
+            if not self.last_sensor_state:
+                self.logger.warning("[!] LEAK DETECTED — starting confirmation process")
+            if self._quick_confirm_leak():
+                delivered = self._send_alerts(sensor.name)
+                if delivered:
+                    self.alert_sent = True
+                else:
+                    # Confirmed leak, but nothing was delivered — keep trying.
+                    self._alert_retry_at = _time.monotonic() + ALERT_RETRY_BACKOFF
+                    self.logger.error(
+                        f"[!] LEAK CONFIRMED but NO alert could be delivered — "
+                        f"retrying in {ALERT_RETRY_BACKOFF}s"
+                    )
+            # If _quick_confirm_leak() was a false alarm we simply do not latch;
+            # last_sensor_state below stays in step so a genuine re-trigger works.
 
         self.last_sensor_state = current_state
 
@@ -159,67 +223,69 @@ class Plugin(indigo.PluginBase):
 
             try:
                 sensor = indigo.devices[self.leak_sensor_id]
-                if hasattr(sensor, "errorState") and sensor.errorState:
+                if getattr(sensor, "errorState", None):
                     self.logger.info(f"Sensor unavailable on retest {test_num} — cancelling")
                     return False
-                if not sensor.states.get("waterLeak", False):
+                if not self._leak_state(sensor):
                     self.logger.info(f"Leak cleared on retest {test_num} — false alarm")
                     return False
             except Exception as exc:
                 self.logger.error(f"Error during retest {test_num}: {exc}")
                 return False
 
-        self.logger.error("[!] LEAK CONFIRMED after retests — sending alerts")
+        self.logger.error("[!] LEAK CONFIRMED after retests")
         return True
-
-    def _confirm_and_alert(self):
-        """Run confirmation retests then send alerts if still triggered."""
-        if self._quick_confirm_leak():
-            self._send_alerts()
-            self.alert_sent = True
 
     # ----------------------------------------------------------------
     # Alerting
     # ----------------------------------------------------------------
 
-    def _send_alerts(self):
-        """Send Email+ and Pushover alerts."""
+    def _send_alerts(self, location):
+        """Send Email+ and Pushover alerts. Returns True if AT LEAST ONE channel
+        delivered, so the caller only latches the alert on a real delivery."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self._send_email(timestamp)
-        self._send_pushover(timestamp)
+        email_ok = self._send_email(timestamp, location)
+        push_ok  = self._send_pushover(timestamp, location)
+        return email_ok or push_ok
 
-    def _send_email(self, timestamp):
-        """Send alert via indigo.server.sendEmailTo (uses first SMTP device)."""
+    def _send_email(self, timestamp, location):
+        """Send alert via indigo.server.sendEmailTo (uses first SMTP device).
+        Returns True on success, False on any failure."""
         if not self.email_to:
             self.logger.error("Cannot send leak alert email — no recipient configured")
-            return
+            return False
         try:
             body = (
-                f"LEAK DETECTED at Bathroom Boiler\n"
+                f"LEAK DETECTED at {location}\n"
                 f"Time: {timestamp}\n"
                 f"Status: ACTIVE"
             )
             indigo.server.sendEmailTo(self.email_to, subject=self.email_subject, body=body)
             self.logger.info("[OK] Email alert sent")
+            return True
         except Exception as exc:
             self.logger.error(f"Failed to send email: {exc}")
+            return False
 
-    def _send_pushover(self, timestamp):
-        """Send alert via Pushover plugin."""
+    def _send_pushover(self, timestamp, location):
+        """Send alert via Pushover plugin. Returns True on success, False on any
+        failure (plugin missing/disabled, or the send raised)."""
         try:
             pushover = indigo.server.getPlugin(PUSHOVER_PLUGIN_ID)
-            if not pushover.isEnabled():
-                self.logger.warning("Pushover plugin not enabled — skipping push alert")
-                return
+            if pushover is None or not pushover.isEnabled():
+                self.logger.warning("Pushover plugin not available — skipping push alert")
+                return False
             pushover.executeAction("send", props={
                 "msgTitle":    "[URGENT] Water Leak",
-                "msgBody":     f"LEAK DETECTED at Bathroom Boiler\nTime: {timestamp}",
+                "msgBody":     f"LEAK DETECTED at {location}\nTime: {timestamp}",
                 "msgPriority": "1",
                 "msgSound":    "vibrate",
             })
             self.logger.info("[OK] Pushover alert sent")
+            return True
         except Exception as exc:
             self.logger.error(f"Failed to send Pushover alert: {exc}")
+            return False
 
     # ----------------------------------------------------------------
     # Menu handlers
