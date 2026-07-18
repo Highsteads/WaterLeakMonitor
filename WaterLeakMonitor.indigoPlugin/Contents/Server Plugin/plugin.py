@@ -6,7 +6,22 @@
 #              false alarms.
 # Author:      CliveS & Claude Opus 4.8
 # Date:        18-07-2026
-# Version:     1.8
+# Version:     1.9
+#
+# v1.9 (18-07-2026) — deep-review IMPROVEMENTS batch:
+# - New "Send Test Alert" menu item — fires the Pushover + email path with a
+#   TEST label so users can confirm delivery works without a real leak.
+# - Optional re-alert escalation: a new "Re-alert every (minutes)" config
+#   (default 0 = off) re-sends the alert while a confirmed leak keeps flowing,
+#   so a persisting flood keeps nagging.
+# - Show Plugin Info now reports the monitored sensor, its resolved leak state
+#   key, the alert email and the re-alert setting.
+# - DEFAULT_EMAIL_SUBJECT + the PluginConfig subject default no longer name
+#   "Bathroom Boiler" (the alert body already uses the real sensor name).
+# - Declined/deferred: monitoring MULTIPLE leak sensors at once — a valuable
+#   feature but a structural change to the (now safety-hardened + tested) state
+#   machine and the config contract, so planned as its own focused batch rather
+#   than rushed into this release. See repo CLAUDE.md.
 #
 # v1.8 (18-07-2026) — deep-review SAFETY-FIX batch:
 # - CRITICAL: a CONFIRMED leak whose alert could not be delivered is no longer
@@ -73,7 +88,7 @@ except ImportError:
 # ================================
 
 DEFAULT_LEAK_SENSOR_ID = 5913615   # "Bathroom Boiler Leak Sensor"
-DEFAULT_EMAIL_SUBJECT  = "[URGENT ALERT] Bathroom Boiler Water Leak Detected"
+DEFAULT_EMAIL_SUBJECT  = "[URGENT ALERT] Water Leak Detected"
 
 
 def _as_int(value, default):
@@ -101,6 +116,8 @@ class Plugin(indigo.PluginBase):
         self.last_sensor_state = None
         self.alert_sent        = False   # True only once an alert has been DELIVERED
         self._alert_retry_at   = 0.0     # monotonic time of the next delivery retry
+        self._realert_at       = 0.0     # monotonic time of the next re-alert (escalation)
+        self.realert_minutes   = _as_int(pluginPrefs.get("reAlertMinutes"), 0)
         self.timestamp_enabled = bool(pluginPrefs.get("timestampEnabled", True))
 
         if install_timestamp_filter:
@@ -132,10 +149,11 @@ class Plugin(indigo.PluginBase):
     def closedPrefsConfigUi(self, valuesDict, userCancelled):
         if userCancelled:
             return
-        self.debug          = valuesDict.get("showDebugInfo", False)
-        self.leak_sensor_id = _as_int(valuesDict.get("leakSensorId"), DEFAULT_LEAK_SENSOR_ID)
-        self.email_to       = _SECRETS_EMAIL or valuesDict.get("alertEmail", "")
-        self.email_subject  = valuesDict.get("alertSubject", "") or DEFAULT_EMAIL_SUBJECT
+        self.debug           = valuesDict.get("showDebugInfo", False)
+        self.leak_sensor_id  = _as_int(valuesDict.get("leakSensorId"), DEFAULT_LEAK_SENSOR_ID)
+        self.email_to        = _SECRETS_EMAIL or valuesDict.get("alertEmail", "")
+        self.email_subject   = valuesDict.get("alertSubject", "") or DEFAULT_EMAIL_SUBJECT
+        self.realert_minutes = _as_int(valuesDict.get("reAlertMinutes"), 0)
         self.logger.info("Plugin configuration updated")
 
     def runConcurrentThread(self):
@@ -200,7 +218,8 @@ class Plugin(indigo.PluginBase):
             if self._quick_confirm_leak():
                 delivered = self._send_alerts(sensor.name)
                 if delivered:
-                    self.alert_sent = True
+                    self.alert_sent  = True
+                    self._realert_at = _time.monotonic() + self.realert_minutes * 60
                 else:
                     # Confirmed leak, but nothing was delivered — keep trying.
                     self._alert_retry_at = _time.monotonic() + ALERT_RETRY_BACKOFF
@@ -210,6 +229,13 @@ class Plugin(indigo.PluginBase):
                     )
             # If _quick_confirm_leak() was a false alarm we simply do not latch;
             # last_sensor_state below stays in step so a genuine re-trigger works.
+
+        elif self.alert_sent and self.realert_minutes > 0 and _time.monotonic() >= self._realert_at:
+            # Escalation: the leak is still active and was already alerted —
+            # re-notify every reAlertMinutes so a persisting flood keeps nagging.
+            self.logger.warning(f"[!] LEAK STILL ACTIVE — re-alerting ({sensor.name})")
+            self._send_alerts(sensor.name)
+            self._realert_at = _time.monotonic() + self.realert_minutes * 60
 
         self.last_sensor_state = current_state
 
@@ -291,8 +317,33 @@ class Plugin(indigo.PluginBase):
     # Menu handlers
     # ----------------------------------------------------------------
 
+    def sendTestAlert(self, valuesDict=None, typeId=None):
+        """Menu: Send Test Alert — fires the Pushover + email path so the user
+        can confirm delivery works WITHOUT waiting for a real leak."""
+        try:
+            name = indigo.devices[self.leak_sensor_id].name
+        except KeyError:
+            name = f"sensor {self.leak_sensor_id}"
+        self.logger.info("Sending TEST leak alert (Pushover + email) ...")
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        email_ok = self._send_email(ts, f"{name} (TEST)")
+        push_ok  = self._send_pushover(ts, f"{name} (TEST)")
+        if email_ok or push_ok:
+            self.logger.info(f"[OK] Test alert delivered — email={email_ok} pushover={push_ok}")
+        else:
+            self.logger.error("Test alert FAILED on BOTH channels — check email + Pushover config")
+
     def showPluginInfo(self, valuesDict=None, typeId=None):
+        try:
+            sensor  = indigo.devices[self.leak_sensor_id]
+            sk      = "waterLeak" if "waterLeak" in sensor.states else "onOffState"
+            sensor_line = f"{sensor.name} (ID {self.leak_sensor_id}, state '{sk}')"
+        except KeyError:
+            sensor_line = f"ID {self.leak_sensor_id} — NOT FOUND"
         extras = [
+            ("Monitored sensor:",  sensor_line),
+            ("Alert email:",       self.email_to or "(not set)"),
+            ("Re-alert every:",    f"{self.realert_minutes} min" if self.realert_minutes > 0 else "off"),
             ("Timestamps in Log:", "ON" if self.timestamp_enabled else "OFF"),
         ]
         if log_startup_banner:

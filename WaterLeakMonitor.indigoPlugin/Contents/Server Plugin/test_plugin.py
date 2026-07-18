@@ -51,13 +51,15 @@ class FakeSensor:
         return self._on
 
 
-def make_plugin(email="x@example.com"):
+def make_plugin(email="x@example.com", realert_minutes=0):
     p = wlm.Plugin.__new__(wlm.Plugin)
     p.logger = MagicMock()
     p.debug = False
     p.last_sensor_state = False
     p.alert_sent = False
     p._alert_retry_at = 0.0
+    p._realert_at = 0.0
+    p.realert_minutes = realert_minutes
     p.leak_sensor_id = wlm.DEFAULT_LEAK_SENSOR_ID
     p.email_to = email
     p.email_subject = "leak"
@@ -213,6 +215,54 @@ class TestStateMachine(unittest.TestCase):
         self.p._quick_confirm_leak = orig
         self.p._check_leak_sensor()
         self.assertTrue(self.p.alert_sent)
+
+
+class TestReAlertEscalation(unittest.TestCase):
+    """v1.9: with reAlertMinutes>0, a persisting leak re-alerts on schedule;
+    with 0 (default) it alerts once only."""
+
+    def setUp(self):
+        _reset_server()
+        wlm.QUICK_RETEST_DELAY = 0
+        wlm.ALERT_RETRY_BACKOFF = 0
+        self.sensor = FakeSensor(states={"waterLeak": True})
+        _ind.devices[wlm.DEFAULT_LEAK_SENSOR_ID] = self.sensor
+
+    def test_realert_off_alerts_once(self):
+        p = make_plugin(realert_minutes=0)
+        p._check_leak_sensor()
+        n = _ind.server.sendEmailTo.call_count
+        p._check_leak_sensor()
+        p._check_leak_sensor()
+        self.assertEqual(_ind.server.sendEmailTo.call_count, n)
+
+    def test_realert_on_resends_after_interval(self):
+        p = make_plugin(realert_minutes=5)   # _realert_at set 300s ahead on latch
+        p._check_leak_sensor()
+        self.assertTrue(p.alert_sent)
+        n = _ind.server.sendEmailTo.call_count
+        p._check_leak_sensor()   # not yet due
+        self.assertEqual(_ind.server.sendEmailTo.call_count, n)
+        # force the re-alert time to now
+        p._realert_at = 0.0
+        p._check_leak_sensor()
+        self.assertGreater(_ind.server.sendEmailTo.call_count, n, "should re-alert once due")
+
+
+class TestSendTestAlert(unittest.TestCase):
+    """v1.9: the Test Alert menu exercises the delivery path with a TEST label."""
+
+    def setUp(self):
+        _reset_server()
+        self.sensor = FakeSensor(name="Kitchen Under Sink Water Sensor",
+                                 states={"onOffState": False})
+        _ind.devices[wlm.DEFAULT_LEAK_SENSOR_ID] = self.sensor
+
+    def test_test_alert_sends_with_test_label(self):
+        p = make_plugin()
+        p.sendTestAlert()
+        body = _ind.server.sendEmailTo.call_args.kwargs.get("body", "")
+        self.assertIn("Kitchen Under Sink Water Sensor (TEST)", body)
 
 
 class TestTickIsolation(unittest.TestCase):

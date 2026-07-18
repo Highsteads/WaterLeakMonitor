@@ -5,11 +5,15 @@ Pushover and email alerts with confirmation retests to avoid false alarms.
 
 ## Features
 
-- Polls a Zigbee water leak sensor every 2 seconds
+- Polls a water leak sensor every 2 seconds
+- Works with Zigbee2MQTT (`waterLeak` state) and Z-Wave sensors (falls back to `onOffState`)
 - Confirmation retest before alerting (1 × 5s) to eliminate false triggers
 - Pushover push notification on confirmed leak
 - Email alert via Indigo's built-in Email+ plugin
-- Auto-clears alert flag when sensor returns to dry
+- **Never silently drops a confirmed leak** — if an alert can't be delivered (email or Pushover down) it keeps retrying until it gets through, rather than assuming it was sent
+- Optional re-alert while a leak keeps flowing, so a persisting flood keeps nagging
+- **Send Test Alert** menu item to verify Pushover and email delivery without a real leak
+- Auto-clears the alert once the sensor returns to dry
 - Handles sensor offline/unavailable states gracefully
 
 ## Requirements
@@ -30,13 +34,16 @@ Pushover and email alerts with confirmation retests to avoid false alarms.
 
 ## Configuration
 
-Edit the constants at the top of `Contents/Server Plugin/plugin.py`:
+Open **Plugins → Water Leak Monitor → Configure** and fill in:
 
-```python
-LEAK_SENSOR_ID  = 5913615   # Indigo device ID of your water leak sensor
-EMAIL_TO        = "your-alert@example.com"
-EMAIL_SUBJECT   = "[URGENT ALERT] Water Leak Detected"
-```
+| Field | Meaning |
+|---|---|
+| Leak Sensor Device ID | Indigo device ID of the water leak sensor to monitor |
+| Alert Email Address | Recipient for leak-alert emails (fallback if `WATERLEAK_ALERT_EMAIL` is not in `IndigoSecrets.py`) |
+| Email Subject | Subject line for the alert email |
+| Re-alert every (minutes) | If a confirmed leak keeps flowing, re-send the alert this often. `0` = alert once only (default) |
+
+After saving, use **Plugins → Water Leak Monitor → Send Test Alert** to confirm your Pushover and email delivery actually work.
 
 ## Credentials — `IndigoSecrets.py` vs `IndigoSecrets_example.py`
 
@@ -68,6 +75,12 @@ Monitor uses the same convention).
 To turn the prefix off (or back on) at any time:
 
 **Plugins → Water Leak Monitor → Toggle Timestamps in Log (on/off)**
+
+## Version history
+
+- **1.9** (18-07-2026) — deep-review improvements: a Send Test Alert menu item to verify delivery without a real leak, an optional re-alert while a leak keeps flowing, and Show Plugin Info now reports the monitored sensor and its state.
+- **1.8** (18-07-2026) — deep-review safety fixes: a confirmed leak whose alert could not be delivered is no longer silently treated as sent — it keeps retrying until it gets through. The monitor loop can no longer be stopped by an unexpected error, Z-Wave sensors (which expose `onOffState`) are now monitored, and the alert names your actual sensor. First test suite added.
+- **1.6** (23-05-2026) — millisecond timestamp prefix on every log line and a Toggle Timestamps menu item.
 
 The setting is stored in `pluginPrefs` (`timestampEnabled`) and persists across
 restarts. Defaults to ON.

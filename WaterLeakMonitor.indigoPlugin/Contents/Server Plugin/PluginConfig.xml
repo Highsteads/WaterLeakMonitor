@@ -17,8 +17,13 @@
         <Description>Fallback recipient for leak-alert emails. Used only if WATERLEAK_ALERT_EMAIL is missing from IndigoSecrets.py.</Description>
     </Field>
 
-    <Field type="textfield" id="alertSubject" defaultValue="[URGENT ALERT] Bathroom Boiler Water Leak Detected">
+    <Field type="textfield" id="alertSubject" defaultValue="[URGENT ALERT] Water Leak Detected">
         <Label>Email Subject:</Label>
+    </Field>
+
+    <Field type="textfield" id="reAlertMinutes" defaultValue="0">
+        <Label>Re-alert every (minutes):</Label>
+        <Description>If a confirmed leak keeps flowing, re-send the alert this often. 0 = alert once only (default).</Description>
     </Field>
 
     <Field type="separator" id="sep2"/>
