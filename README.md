@@ -47,8 +47,8 @@ After saving, use **Plugins → Water Leak Monitor → Send Test Alert** to conf
 
 ## Credentials — `IndigoSecrets.py` vs `IndigoSecrets_example.py`
 
-This plugin (along with all CliveS Indigo plugins) reads sensitive values from
-a shared master credentials file at:
+This plugin, like every CliveS Indigo plugin, reads sensitive values from one
+shared master file:
 
 `/Library/Application Support/Perceptive Automation/IndigoSecrets.py`
 
@@ -57,22 +57,23 @@ a shared master credentials file at:
 | `IndigoSecrets.py` | Working file the plugin reads at runtime. Keep a backup in a password manager. | YES | **NO** — listed in `.gitignore` |
 | `IndigoSecrets_example.py` | Template only — empty placeholders. Shipped in the plugin bundle. | NO | YES |
 
-If you do not have `IndigoSecrets.py`, copy `IndigoSecrets_example.py` from
-the plugin bundle to `/Library/Application Support/Perceptive Automation/` and rename it to `IndigoSecrets.py`, then fill in your values. Or skip
-`IndigoSecrets.py` entirely and enter values via the plugin's configuration
-dialog — `IndigoSecrets.py` wins over the dialog when both are set.
+If you don't have `IndigoSecrets.py`, copy `IndigoSecrets_example.py` out of
+the plugin bundle into `/Library/Application Support/Perceptive Automation/`,
+rename it to `IndigoSecrets.py`, and fill in your values. Or skip the file
+altogether and type the values into the plugin's configuration dialog — where
+both are set, `IndigoSecrets.py` wins.
 
-If a required value is set in NEITHER source the plugin logs an ERROR
-pointing the user to either fill in the matching field or add the key to
+If neither source supplies a value the plugin needs, it logs an ERROR naming
+the key and telling you to either fill in the matching field or add the key to
 `IndigoSecrets.py`.
 
 ## Logging
 
-Every log line is prefixed with a millisecond timestamp `[HH:MM:SS.mmm]` so
-events can be correlated tightly with other CliveS plugins (Device Activity
-Monitor uses the same convention).
+Every log line carries a millisecond timestamp `[HH:MM:SS.mmm]`, so you can
+line events up precisely against the other CliveS plugins — Device Activity
+Monitor uses the same format.
 
-To turn the prefix off (or back on) at any time:
+To turn the prefix off, or back on, at any time:
 
 **Plugins → Water Leak Monitor → Toggle Timestamps in Log (on/off)**
 
@@ -82,8 +83,8 @@ To turn the prefix off (or back on) at any time:
 - **1.8** (18-07-2026) — deep-review safety fixes: a confirmed leak whose alert could not be delivered is no longer silently treated as sent — it keeps retrying until it gets through. The monitor loop can no longer be stopped by an unexpected error, Z-Wave sensors (which expose `onOffState`) are now monitored, and the alert names your actual sensor. First test suite added.
 - **1.6** (23-05-2026) — millisecond timestamp prefix on every log line and a Toggle Timestamps menu item.
 
-The setting is stored in `pluginPrefs` (`timestampEnabled`) and persists across
-restarts. Defaults to ON.
+The plugin stores the setting in `pluginPrefs` (`timestampEnabled`) and it
+survives a restart. It defaults to ON.
 
 ## Authors & licence
 
