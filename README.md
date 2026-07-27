@@ -77,15 +77,17 @@ To turn the prefix off, or back on, at any time:
 
 **Plugins → Water Leak Monitor → Toggle Timestamps in Log (on/off)**
 
+The plugin stores the setting in `pluginPrefs` (`timestampEnabled`) and it
+survives a restart. It defaults to ON.
+
 ## Version history
 
 - **1.9.1** (21-07-2026) — housekeeping. Shared-utility refresh: calling the log timestamp filter twice no longer double-stamps every line, and the module imports cleanly outside Indigo.
 - **1.9** (18-07-2026) — deep-review improvements: a Send Test Alert menu item to verify delivery without a real leak, an optional re-alert while a leak keeps flowing, and Show Plugin Info now reports the monitored sensor and its state.
 - **1.8** (18-07-2026) — deep-review safety fixes: a confirmed leak whose alert could not be delivered is no longer silently treated as sent — it keeps retrying until it gets through. The monitor loop can no longer be stopped by an unexpected error, Z-Wave sensors (which expose `onOffState`) are now monitored, and the alert names your actual sensor. First test suite added.
+- **1.7** (05-06-2026) — estate bug-sweep. The leak sensor's device ID is now read defensively. The old code only coped with the field being blank, so anything non-numeric left in it crashed the plugin on load and again on saving the settings dialog.
 - **1.6** (23-05-2026) — millisecond timestamp prefix on every log line and a Toggle Timestamps menu item.
-
-The plugin stores the setting in `pluginPrefs` (`timestampEnabled`) and it
-survives a restart. It defaults to ON.
+- **1.5** (13-05-2026) — the alert email address moved into `IndigoSecrets.py` (`WATERLEAK_ALERT_EMAIL`) with a settings-dialog fallback, and the leak sensor's device ID moved out of the source into the settings, so the plugin works for anyone rather than only for one sensor ID. A new `PluginConfig.xml` means the whole thing can be set up without editing any code.
 
 ## Authors & licence
 
