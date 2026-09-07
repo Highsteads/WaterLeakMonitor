@@ -82,6 +82,8 @@ survives a restart. It defaults to ON.
 
 ## Version history
 
+
+**v1.9.2** - **The settings dialog was stretched wider than its own window, so the help text beside each setting was cut off mid-sentence.** The short help that can be attached to a setting is drawn on a single line and never wraps, so the longest one decides how wide every row is — and the window cannot be widened past a fixed maximum. The one long one have moved into ordinary description paragraphs, which do wrap. Two new checks fail the build if any help text or setting label grows long enough to do it again. No setting or behaviour changed.
 - **1.9.1** (21-07-2026) — housekeeping. Shared-utility refresh: calling the log timestamp filter twice no longer double-stamps every line, and the module imports cleanly outside Indigo.
 - **1.9** (18-07-2026) — deep-review improvements: a Send Test Alert menu item to verify delivery without a real leak, an optional re-alert while a leak keeps flowing, and Show Plugin Info now reports the monitored sensor and its state.
 - **1.8** (18-07-2026) — deep-review safety fixes: a confirmed leak whose alert could not be delivered is no longer silently treated as sent — it keeps retrying until it gets through. The monitor loop can no longer be stopped by an unexpected error, Z-Wave sensors (which expose `onOffState`) are now monitored, and the alert names your actual sensor. First test suite added.

@@ -14,7 +14,9 @@
 
     <Field type="textfield" id="alertEmail" defaultValue="">
         <Label>Alert Email Address:</Label>
-        <Description>Fallback recipient for leak-alert emails. Used only if WATERLEAK_ALERT_EMAIL is missing from IndigoSecrets.py.</Description>
+    </Field>
+    <Field id="label_alertEmail_info" type="label">
+        <Label>Fallback recipient for leak-alert emails. Used only if WATERLEAK_ALERT_EMAIL is missing from IndigoSecrets.py.</Label>
     </Field>
 
     <Field type="textfield" id="alertSubject" defaultValue="[URGENT ALERT] Water Leak Detected">
