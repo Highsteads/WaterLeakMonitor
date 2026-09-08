@@ -1,5 +1,7 @@
 # Water Leak Monitor
 
+**Version:** 1.9.2
+
 An [Indigo](https://www.indigodomo.com) plugin that monitors a water leak sensor and sends
 Pushover and email alerts with confirmation retests to avoid false alarms.
 
