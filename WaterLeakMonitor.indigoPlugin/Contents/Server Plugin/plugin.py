@@ -4,9 +4,9 @@
 # Description: Water Leak Monitor - monitors water leak sensors and sends
 #              Pushover + Email alerts with confirmation retests to avoid
 #              false alarms.
-# Author:      CliveS & Claude Opus 4.8
-# Date:        21-07-2026
-# Version:     1.9.2
+# Author:      CliveS & Claude Fable 5.1
+# Date:        11-09-2026
+# Version:     1.9.3
 #
 # v1.9.1 (21-07-2026): shared plugin_utils.py refreshed to v1.3 — the
 # estate-wide propagation of the four Appliance Monitor deep-review fixes.

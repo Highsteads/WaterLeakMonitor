@@ -1,6 +1,6 @@
 # Water Leak Monitor
 
-**Version:** 1.9.2
+**Version:** 1.9.3
 
 An [Indigo](https://www.indigodomo.com) plugin that monitors a water leak sensor and sends
 Pushover and email alerts with confirmation retests to avoid false alarms.
@@ -84,6 +84,8 @@ survives a restart. It defaults to ON.
 
 ## Version history
 
+
+**v1.9.3** - **The bundle now carries the standard GitHub record.** Indigo plugins can carry a small note inside the bundle saying where their source lives on GitHub, spelt the way the Indigo Domotics and community plugins spell it. This one now has it, pointing at this repository. Nothing else changed.
 
 **v1.9.2** - **The settings dialog was stretched wider than its own window, so the help text beside each setting was cut off mid-sentence.** The short help that can be attached to a setting is drawn on a single line and never wraps, so the longest one decides how wide every row is — and the window cannot be widened past a fixed maximum. The one long one have moved into ordinary description paragraphs, which do wrap. Two new checks fail the build if any help text or setting label grows long enough to do it again. No setting or behaviour changed.
 - **1.9.1** (21-07-2026) — housekeeping. Shared-utility refresh: calling the log timestamp filter twice no longer double-stamps every line, and the module imports cleanly outside Indigo.
