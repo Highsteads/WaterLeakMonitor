@@ -1,99 +1,55 @@
-# Water Leak Monitor
+# Water Leak Monitor for Indigo
 
-**Version:** 1.9.3
+**Watch a water leak sensor from Indigo, and get a Pushover message and an email the moment it finds water.**
 
-An [Indigo](https://www.indigodomo.com) plugin that monitors a water leak sensor and sends
-Pushover and email alerts with confirmation retests to avoid false alarms.
+**Version:** 1.9.3 | **Author:** CliveS & Claude | **Needs:** Indigo 2022.1 or later, a leak sensor in Indigo, and the Pushover plugin or Email+ set up
 
-## Features
+**[Read the full guide](https://highsteads.github.io/WaterLeakMonitor/)** — setting up, what the alerts look like, and what to do when something goes wrong.
 
-- Polls a water leak sensor every 2 seconds
-- Works with Zigbee2MQTT (`waterLeak` state) and Z-Wave sensors (falls back to `onOffState`)
-- Confirmation retest before alerting (1 × 5s) to eliminate false triggers
-- Pushover push notification on confirmed leak
-- Email alert via Indigo's built-in Email+ plugin
-- **Never silently drops a confirmed leak** — if an alert can't be delivered (email or Pushover down) it keeps retrying until it gets through, rather than assuming it was sent
-- Optional re-alert while a leak keeps flowing, so a persisting flood keeps nagging
-- **Send Test Alert** menu item to verify Pushover and email delivery without a real leak
-- Auto-clears the alert once the sensor returns to dry
-- Handles sensor offline/unavailable states gracefully
+---
 
-## Requirements
+## What it does
 
-- Indigo 2022.1 or later (Python 3.10+ bundled with Indigo)
-- macOS (arm64 or x86_64)
-- A water leak sensor device visible in Indigo (Zigbee, Z-Wave, etc.)
-- [Pushover plugin for Indigo](https://www.indigodomo.com/pluginstore/) (io.thechad.indigoplugin.pushover)
-- Email+ plugin (bundled with Indigo)
+This plugin lets [Indigo](https://www.indigodomo.com) keep watch on a water leak sensor you already have. I use it on the sensor by the boiler in the bathroom, where a slow drip could go unseen for days.
 
-*Developed and tested on Indigo 2025.2 / Python 3.13. Older Indigo releases that meet the minimum API version above should also work — the API floor is what Indigo's plugin loader actually checks.*
+- **Checks your leak sensor every two seconds.**
+- **Checks a second time before it alerts,** five seconds later, so a sensor that reads wet for a moment does not wake you for nothing.
+- **Sends a Pushover message and an email** naming the sensor and the time. The Pushover message goes at high priority and makes the phone vibrate.
+- **Keeps trying if an alert cannot be sent.** If neither the email nor the Pushover message goes out, the plugin tries again every minute while the sensor is wet, so a real leak is never lost because your mail was down.
+- **Can repeat the alert** every so many minutes while the sensor stays wet.
+- **Sends a test alert** from the Plugins menu, so you can check both reach you without a real leak.
 
-## Installation
+## What it works with
 
-1. Go to the [Releases](https://github.com/Highsteads/WaterLeakMonitor/releases) page and download `WaterLeakMonitor.indigoPlugin.zip`
+- **Leak sensors:** Zigbee sensors added through Zigbee2MQTT, Z-Wave sensors, and any other leak sensor that Indigo shows as on when it is wet. The plugin watches one sensor.
+- **Pushover:** the Pushover plugin for Indigo, from the Indigo Plugin Store.
+- **Email:** Indigo's own Email+ plugin, with an outgoing mail account set up in it.
+
+You need at least one of Pushover and Email+, and I recommend both.
+
+## Installing
+
+1. Go to the [Releases page](https://github.com/Highsteads/WaterLeakMonitor/releases/latest) and download `WaterLeakMonitor.indigoPlugin.zip`
 2. Unzip the downloaded file — you will get `WaterLeakMonitor.indigoPlugin`
 3. Double-click `WaterLeakMonitor.indigoPlugin` — Indigo will install it automatically
 
-## Configuration
+## Setting it up
 
-Open **Plugins → Water Leak Monitor → Configure** and fill in:
+1. In Indigo's main window, right-click your leak sensor and choose **Copy ID**.
+2. Open **Plugins → Water Leak Monitor → Configure**, paste the number into **Leak Sensor Device ID**, fill in **Alert Email Address**, and click **Save**.
+3. Choose **Plugins → Water Leak Monitor → Send Test Alert (verify Pushover + email)**, and check your phone and inbox.
 
-| Field | Meaning |
-|---|---|
-| Leak Sensor Device ID | Indigo device ID of the water leak sensor to monitor |
-| Alert Email Address | Recipient for leak-alert emails (fallback if `WATERLEAK_ALERT_EMAIL` is not in `IndigoSecrets.py`) |
-| Email Subject | Subject line for the alert email |
-| Re-alert every (minutes) | If a confirmed leak keeps flowing, re-send the alert this often. `0` = alert once only (default) |
+The [full guide](https://highsteads.github.io/WaterLeakMonitor/) goes through each step, explains every setting, and covers what to do if something does not work.
 
-After saving, use **Plugins → Water Leak Monitor → Send Test Alert** to confirm your Pushover and email delivery actually work.
+## What's new
 
-## Credentials — `IndigoSecrets.py` vs `IndigoSecrets_example.py`
+**v1.9.3** — The plugin carries a note of where its code lives on GitHub, the same way other Indigo plugins do. Nothing else changed.
 
-This plugin, like every CliveS Indigo plugin, reads sensitive values from one
-shared master file:
+**v1.9.2** — The help text in the settings window is no longer cut off part way through. No setting or behaviour changed.
 
-`/Library/Application Support/Perceptive Automation/IndigoSecrets.py`
+**v1.9.1** — A tidy-up of the code shared with my other plugins. A log line can no longer come out with the time printed twice.
 
-| File | Purpose | Real data? | Committed to GitHub? |
-|------|---------|------------|----------------------|
-| `IndigoSecrets.py` | Working file the plugin reads at runtime. Keep a backup in a password manager. | YES | **NO** — listed in `.gitignore` |
-| `IndigoSecrets_example.py` | Template only — empty placeholders. Shipped in the plugin bundle. | NO | YES |
-
-If you don't have `IndigoSecrets.py`, copy `IndigoSecrets_example.py` out of
-the plugin bundle into `/Library/Application Support/Perceptive Automation/`,
-rename it to `IndigoSecrets.py`, and fill in your values. Or skip the file
-altogether and type the values into the plugin's configuration dialog — where
-both are set, `IndigoSecrets.py` wins.
-
-If neither source supplies a value the plugin needs, it logs an ERROR naming
-the key and telling you to either fill in the matching field or add the key to
-`IndigoSecrets.py`.
-
-## Logging
-
-Every log line carries a millisecond timestamp `[HH:MM:SS.mmm]`, so you can
-line events up precisely against the other CliveS plugins — Device Activity
-Monitor uses the same format.
-
-To turn the prefix off, or back on, at any time:
-
-**Plugins → Water Leak Monitor → Toggle Timestamps in Log (on/off)**
-
-The plugin stores the setting in `pluginPrefs` (`timestampEnabled`) and it
-survives a restart. It defaults to ON.
-
-## Version history
-
-
-**v1.9.3** - **The bundle now carries the standard GitHub record.** Indigo plugins can carry a small note inside the bundle saying where their source lives on GitHub, spelt the way the Indigo Domotics and community plugins spell it. This one now has it, pointing at this repository. Nothing else changed.
-
-**v1.9.2** - **The settings dialog was stretched wider than its own window, so the help text beside each setting was cut off mid-sentence.** The short help that can be attached to a setting is drawn on a single line and never wraps, so the longest one decides how wide every row is — and the window cannot be widened past a fixed maximum. The one long one have moved into ordinary description paragraphs, which do wrap. Two new checks fail the build if any help text or setting label grows long enough to do it again. No setting or behaviour changed.
-- **1.9.1** (21-07-2026) — housekeeping. Shared-utility refresh: calling the log timestamp filter twice no longer double-stamps every line, and the module imports cleanly outside Indigo.
-- **1.9** (18-07-2026) — deep-review improvements: a Send Test Alert menu item to verify delivery without a real leak, an optional re-alert while a leak keeps flowing, and Show Plugin Info now reports the monitored sensor and its state.
-- **1.8** (18-07-2026) — deep-review safety fixes: a confirmed leak whose alert could not be delivered is no longer silently treated as sent — it keeps retrying until it gets through. The monitor loop can no longer be stopped by an unexpected error, Z-Wave sensors (which expose `onOffState`) are now monitored, and the alert names your actual sensor. First test suite added.
-- **1.7** (05-06-2026) — estate bug-sweep. The leak sensor's device ID is now read defensively. The old code only coped with the field being blank, so anything non-numeric left in it crashed the plugin on load and again on saving the settings dialog.
-- **1.6** (23-05-2026) — millisecond timestamp prefix on every log line and a Toggle Timestamps menu item.
-- **1.5** (13-05-2026) — the alert email address moved into `IndigoSecrets.py` (`WATERLEAK_ALERT_EMAIL`) with a settings-dialog fallback, and the leak sensor's device ID moved out of the source into the settings, so the plugin works for anyone rather than only for one sensor ID. A new `PluginConfig.xml` means the whole thing can be set up without editing any code.
+Every version is listed in the [version history](https://highsteads.github.io/WaterLeakMonitor/changelog.html).
 
 ## Authors & licence
 
