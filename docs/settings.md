@@ -9,11 +9,11 @@ All the settings are in one place. Open them with **Plugins → Water Leak Monit
 
 | Setting | What it does |
 |---|---|
-| **Leak Sensor Device ID** | The ID number Indigo gives your leak sensor. Right-click the sensor in Indigo's main window and choose **Copy ID** to get it. The box starts with the number of my own sensor, so replace it with yours. If the box is left blank or holds something that is not a number, the plugin goes back to that starting number. |
+| **Leak Sensor Device ID** | The ID number Indigo gives your leak sensor. Right-click the sensor in Indigo's main window and choose **Copy ID** to get it. The box starts empty, and while it is empty the plugin watches nothing and says so once in the Event Log. If it holds something that is not a number, the Event Log says that once too. |
 | **Alert Email Address** | The address the email alerts go to. If the shared `IndigoSecrets.py` file described below holds an address, that one is used instead and this box is ignored. |
 | **Email Subject** | The subject line of the email alerts. It starts as `[URGENT ALERT] Water Leak Detected`, and a blank box goes back to that. |
 | **Re-alert every (minutes)** | While the sensor stays wet, the plugin sends the alerts again this often. Nought, the starting value, means one alert per leak. A blank box or anything that is not a whole number counts as nought. |
-| **Enable Debug Logging** | Adds extra lines to the Event Log for chasing a problem, such as a note when the sensor goes into error in the middle of a leak. Leave it unticked day to day. |
+| **Enable Debug Logging** | Adds extra lines to the Event Log for chasing a problem, such as a note when the sensor drops out for a moment too short to message you about. Leave it unticked day to day. |
 
 The two-second check and the five-second wait before an alert are fixed, and are not settings.
 

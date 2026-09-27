@@ -7,9 +7,9 @@
 
     <Field type="separator" id="sep1"/>
 
-    <Field type="textfield" id="leakSensorId" defaultValue="5913615">
+    <Field type="textfield" id="leakSensorId" defaultValue="">
         <Label>Leak Sensor Device ID:</Label>
-        <Description>Indigo device ID of the water leak sensor to monitor.</Description>
+        <Description>Right-click the sensor, choose Copy ID and paste it here. Blank watches nothing.</Description>
     </Field>
 
     <Field type="textfield" id="alertEmail" defaultValue="">

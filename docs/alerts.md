@@ -35,6 +35,18 @@ If you set **Re-alert every (minutes)** to a number above nought, the plugin sen
 
 **Send Test Alert** in the Plugins menu sends the same two alerts, with **(TEST)** after the sensor's name. The title, the subject and the priority are the same as a real alert's, so the test shows you exactly what a real one will look like on your phone.
 
+## When the sensor stops answering
+
+If Indigo shows your sensor with an error, or you disable it, the plugin cannot see whether it is wet, so it tells you. This is not a leak alert, so the Pushover message goes at normal priority.
+
+| Part | What it says |
+|---|---|
+| **Pushover title** | Leak sensor not answering |
+| **Email subject** | Water Leak Monitor: Leak sensor not answering |
+| **Message** | *Your sensor's name* has stopped answering, with what Indigo shows for it, such as "no ack", and a promise of another message when it is back |
+
+When the sensor answers again, a second message titled **Leak sensor back** says how long it was gone, such as "after 12 minutes". You get no more than one "not answering" message every half an hour, however often the sensor drops in and out.
+
 ## When the water clears
 
 The plugin sends no all-clear message. When the sensor reads dry again, the Event Log says **Leak sensor cleared**, and the next time the sensor reads wet the plugin alerts you afresh.

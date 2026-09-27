@@ -39,9 +39,15 @@ When the sensor reads dry again, the Event Log says **Leak sensor cleared** and 
 
 ## When the sensor itself has a problem
 
-If Indigo shows the sensor with an error, which is how many plugins show a device that has stopped answering, the plugin leaves it alone and sends no alert until the error clears. If the error comes in the middle of a leak, the plugin starts afresh when the sensor comes back, so a sensor that is still wet then brings a new alert.
+If Indigo shows the sensor with an error, which is how many plugins show a device that has stopped answering, or you disable the sensor, the plugin cannot see whether it is wet. It tells you so, once, with a line in the Event Log, a Pushover message and an email, and tells you again when the sensor is back. The [alerts](alerts.md) page shows what these messages say.
 
-The plugin does not tell you when your sensor stops answering. If that matters to you, keep an eye on the sensor in Indigo's device list, where a device in error shows in red.
+A sensor that keeps dropping out for a moment and coming back would otherwise send a stream of messages, so the plugin sends no more than one "not answering" message every half an hour. If the sensor is still not answering when the half hour is up, you hear about it then.
+
+If the error comes in the middle of a leak, the plugin starts afresh when the sensor comes back, so a sensor that is still wet then brings a new alert.
+
+## When no sensor is chosen
+
+If the **Leak Sensor Device ID** box is empty, the plugin watches nothing, and says so once in the Event Log each time it starts or you save the settings. If the number in the box matches no device, the Event Log shows a red line once an hour until you put it right.
 
 ## What goes in the log
 

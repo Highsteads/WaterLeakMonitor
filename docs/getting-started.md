@@ -31,7 +31,7 @@ The plugin knows your sensor by the ID number Indigo gives every device. To find
 
 Open **Plugins → Water Leak Monitor → Configure**.
 
-1. Paste the number into **Leak Sensor Device ID**. The box starts with the number of my own sensor, which will not exist on your system, so replace it.
+1. Paste the number into **Leak Sensor Device ID**. The box starts empty, and the plugin watches nothing until you fill it in.
 2. Type the address the email alerts should go to into **Alert Email Address**.
 3. Leave the rest as they are to start with, and click **Save**.
 

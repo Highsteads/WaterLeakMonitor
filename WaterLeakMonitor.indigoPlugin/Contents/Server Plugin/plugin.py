@@ -4,9 +4,15 @@
 # Description: Water Leak Monitor - monitors water leak sensors and sends
 #              Pushover + Email alerts with confirmation retests to avoid
 #              false alarms.
-# Author:      CliveS & Claude Fable 5.1
-# Date:        11-09-2026
-# Version:     1.9.3
+# Author:      CliveS & Claude Fable 5.1 & Claude Opus 5.5
+# Date:        27-09-2026
+# Version:     1.10.0
+#
+# v1.10.0 (27-09-2026, Claude Opus 5.5): a sensor in error or disabled is now
+# reported once (WARNING + Pushover/email, at most one notice per 30 min) and
+# again when it answers; no personal default sensor ID (blank = not configured,
+# logged once at INFO); "Leak sensor not found" repeats at most hourly; the
+# stale bundle CLAUDE.md is gone.
 #
 # v1.9.1 (21-07-2026): shared plugin_utils.py refreshed to v1.3 — the
 # estate-wide propagation of the four Appliance Monitor deep-review fixes.
@@ -98,7 +104,9 @@ except ImportError:
 # CONFIGURATION (defaults — overridden by PluginConfig / IndigoSecrets)
 # ================================
 
-DEFAULT_LEAK_SENSOR_ID = 5913615   # "Bathroom Boiler Leak Sensor"
+# No default leak sensor: a blank Leak Sensor Device ID means "not configured".
+# (Until v1.10.0 the default was the author's own device ID, which does not exist
+# on anyone else's system and filled their log with "not found" errors.)
 DEFAULT_EMAIL_SUBJECT  = "[URGENT ALERT] Water Leak Detected"
 
 
@@ -118,6 +126,22 @@ ALERT_RETRY_BACKOFF = 60    # seconds between delivery retries when a CONFIRMED
                             # leak's alert could not be delivered (SMTP/Pushover
                             # down) — keep trying so a real leak is never silently
                             # dropped, without hammering the channels every tick.
+SENSOR_NOTICE_GAP   = 1800  # at most one "sensor not answering" notice per 30 min,
+                            # so a sensor that drops in and out cannot flood the phone.
+                            # A drop that outlasts the gap is still reported.
+NOT_FOUND_LOG_GAP   = 3600  # repeat the "Leak sensor not found" error at most hourly
+
+
+def _describe_duration(seconds):
+    """How long, as a person would say it: 'a minute', '12 minutes', 'about 3 hours'."""
+    minutes = int(round(max(0.0, seconds) / 60.0))
+    if minutes < 1:
+        return "less than a minute"
+    if minutes == 1:
+        return "a minute"
+    if minutes < 90:
+        return f"{minutes} minutes"
+    return f"about {int(round(minutes / 60.0))} hours"
 
 
 class Plugin(indigo.PluginBase):
@@ -136,8 +160,19 @@ class Plugin(indigo.PluginBase):
         else:
             self._ts_filter = None
 
-        # Resolve config: IndigoSecrets first, then PluginConfig, then default.
-        self.leak_sensor_id = _as_int(pluginPrefs.get("leakSensorId"), DEFAULT_LEAK_SENSOR_ID)
+        # Sensor-watch bookkeeping (v1.10.0): offline notices, not-found rate limit,
+        # and the once-only "not configured" note.
+        self._offline_since       = None    # monotonic time the sensor went unavailable
+        self._offline_notified    = False   # user told it is down, not yet told it is back
+        self._offline_notice_next = 0.0     # earliest monotonic time for another down notice
+        self._sensor_missing      = False
+        self._missing_log_next    = 0.0
+        self._config_note_logged  = False
+
+        # Resolve config: IndigoSecrets first, then PluginConfig. A blank sensor
+        # ID resolves to 0, which means "not configured" (no personal default).
+        self._sensor_id_raw = pluginPrefs.get("leakSensorId", "")
+        self.leak_sensor_id = _as_int(self._sensor_id_raw, 0)
         self.email_to       = _SECRETS_EMAIL or pluginPrefs.get("alertEmail", "")
         self.email_subject  = pluginPrefs.get("alertSubject", "") or DEFAULT_EMAIL_SUBJECT
 
@@ -150,7 +185,7 @@ class Plugin(indigo.PluginBase):
         # Startup banner moved to showPluginInfo on demand (revised 25-May-2026 per Jay).
 
     def startup(self):
-        self.logger.info(f"Water Leak Monitor started — sensor ID: {self.leak_sensor_id}")
+        self.logger.info(f"Water Leak Monitor started — sensor ID: {self.leak_sensor_id or '(none chosen)'}")
         self.logger.info(f"Poll interval: {POLL_INTERVAL}s | Retests: {QUICK_RETEST_COUNT} x {QUICK_RETEST_DELAY}s")
         self.logger.info(f"Alert email: {self.email_to or '(not set)'}")
 
@@ -161,7 +196,16 @@ class Plugin(indigo.PluginBase):
         if userCancelled:
             return
         self.debug           = valuesDict.get("showDebugInfo", False)
-        self.leak_sensor_id  = _as_int(valuesDict.get("leakSensorId"), DEFAULT_LEAK_SENSOR_ID)
+        new_sensor_id        = _as_int(valuesDict.get("leakSensorId"), 0)
+        if new_sensor_id != self.leak_sensor_id:
+            # A different sensor: forget the old one's offline history.
+            self._offline_since    = None
+            self._offline_notified = False
+        self._sensor_id_raw      = valuesDict.get("leakSensorId", "")
+        self.leak_sensor_id      = new_sensor_id
+        self._sensor_missing     = False
+        self._missing_log_next   = 0.0
+        self._config_note_logged = False
         self.email_to        = _SECRETS_EMAIL or valuesDict.get("alertEmail", "")
         self.email_subject   = valuesDict.get("alertSubject", "") or DEFAULT_EMAIL_SUBJECT
         self.realert_minutes = _as_int(valuesDict.get("reAlertMinutes"), 0)
@@ -194,21 +238,110 @@ class Plugin(indigo.PluginBase):
             return bool(sensor.states.get("waterLeak", False))
         return bool(getattr(sensor, "onState", sensor.states.get("onOffState", False)))
 
+    @staticmethod
+    def _unavailable_reason(sensor):
+        """Why the sensor cannot be read, or "" if it can: Indigo's error text
+        for a device that has stopped answering, or "disabled"."""
+        err = getattr(sensor, "errorState", None)
+        if err:
+            return str(err)
+        if getattr(sensor, "enabled", True) is False:
+            return "disabled"
+        return ""
+
+    def _note_unconfigured(self):
+        """No usable sensor ID: say so ONCE (per start or settings save)."""
+        if self._config_note_logged:
+            return
+        self._config_note_logged = True
+        raw = str(self._sensor_id_raw or "").strip()
+        if raw:
+            self.logger.warning(
+                f"Leak Sensor Device ID '{raw}' is not a number, so no leak sensor is being "
+                f"watched. Paste the sensor's ID in Plugins -> Water Leak Monitor -> Configure."
+            )
+        else:
+            self.logger.info(
+                "No leak sensor chosen yet, so nothing is being watched. Paste the sensor's ID "
+                "into Leak Sensor Device ID in Plugins -> Water Leak Monitor -> Configure."
+            )
+
+    def _note_sensor_missing(self):
+        """The configured ID matches no device. Rate-limited ERROR."""
+        self._sensor_missing = True
+        now = _time.monotonic()
+        if now < self._missing_log_next:
+            return
+        self._missing_log_next = now + NOT_FOUND_LOG_GAP
+        self.logger.error(
+            f"Leak sensor not found (ID: {self.leak_sensor_id}) — nothing is being watched. "
+            f"Check Leak Sensor Device ID in Configure. (Repeats hourly until fixed.)"
+        )
+
+    def _note_sensor_unavailable(self, sensor, reason):
+        """The sensor is in error or disabled. Tell the user once (WARNING +
+        Pushover/email), no more than once per SENSOR_NOTICE_GAP."""
+        now = _time.monotonic()
+        if self._offline_since is None:
+            self._offline_since = now
+        if self._offline_notified or now < self._offline_notice_next:
+            return
+        self._offline_notified    = True
+        self._offline_notice_next = now + SENSOR_NOTICE_GAP
+        self.logger.warning(
+            f"Leak sensor '{sensor.name}' is not answering ({reason}) — a leak cannot be "
+            f"seen until it is back"
+        )
+        self._send_status_notice(
+            "Leak sensor not answering",
+            f"{sensor.name} has stopped answering, so Water Leak Monitor cannot see whether "
+            f"it is wet. Indigo shows it as \"{reason}\". You will get another message "
+            f"when it is back.",
+        )
+
+    def _note_sensor_back(self, sensor):
+        """The sensor answers again after being unavailable. If the user was
+        told it was down, tell them it is back (INFO + Pushover/email)."""
+        if self._offline_since is None:
+            return
+        away = _time.monotonic() - self._offline_since
+        self._offline_since = None
+        if not self._offline_notified:
+            self.logger.debug(f"Leak sensor '{sensor.name}' answered again after a short drop")
+            return
+        self._offline_notified = False
+        self.logger.info(f"Leak sensor '{sensor.name}' is answering again — watching resumed")
+        self._send_status_notice(
+            "Leak sensor back",
+            f"{sensor.name} is answering again after {_describe_duration(away)}, and "
+            f"Water Leak Monitor is watching it once more.",
+        )
+
     def _check_leak_sensor(self):
         """Check sensor state; confirm + alert on a leak, retrying delivery if
         a confirmed alert could not be sent."""
+        if not self.leak_sensor_id:
+            self._note_unconfigured()
+            return
         try:
             sensor = indigo.devices[self.leak_sensor_id]
         except KeyError:
-            self.logger.error(f"Leak sensor not found (ID: {self.leak_sensor_id})")
+            self._note_sensor_missing()
             return
+        if self._sensor_missing:
+            self._sensor_missing   = False
+            self._missing_log_next = 0.0
+            self.logger.info(f"Leak sensor found again (ID: {self.leak_sensor_id}) — watching resumed")
 
-        if getattr(sensor, "errorState", None):
+        reason = self._unavailable_reason(sensor)
+        if reason:
             if self.alert_sent or self.last_sensor_state:
                 self.logger.debug("Sensor unavailable — resetting leak state")
             self.alert_sent        = False
             self.last_sensor_state = None
+            self._note_sensor_unavailable(sensor, reason)
             return
+        self._note_sensor_back(sensor)
 
         current_state = self._leak_state(sensor)
 
@@ -324,6 +457,33 @@ class Plugin(indigo.PluginBase):
             self.logger.error(f"Failed to send Pushover alert: {exc}")
             return False
 
+    def _send_status_notice(self, title, body):
+        """Send a sensor-status notice (not a leak): email + normal-priority
+        Pushover. Returns True if at least one channel accepted it."""
+        email_ok = False
+        if self.email_to:
+            try:
+                indigo.server.sendEmailTo(self.email_to, subject=f"Water Leak Monitor: {title}", body=body)
+                email_ok = True
+            except Exception as exc:
+                self.logger.error(f"Failed to send sensor status email: {exc}")
+        push_ok = False
+        try:
+            pushover = indigo.server.getPlugin(PUSHOVER_PLUGIN_ID)
+            if pushover is not None and pushover.isEnabled():
+                pushover.executeAction("send", props={
+                    "msgTitle":    title,
+                    "msgBody":     body,
+                    "msgPriority": "0",
+                    "msgSound":    "vibrate",
+                })
+                push_ok = True
+        except Exception as exc:
+            self.logger.error(f"Failed to send sensor status Pushover message: {exc}")
+        if not (email_ok or push_ok):
+            self.logger.debug(f"Sensor status notice '{title}' went nowhere (no email or Pushover available)")
+        return email_ok or push_ok
+
     # ----------------------------------------------------------------
     # Menu handlers
     # ----------------------------------------------------------------
@@ -332,7 +492,7 @@ class Plugin(indigo.PluginBase):
         """Menu: Send Test Alert — fires the Pushover + email path so the user
         can confirm delivery works WITHOUT waiting for a real leak."""
         try:
-            name = indigo.devices[self.leak_sensor_id].name
+            name = indigo.devices[self.leak_sensor_id].name if self.leak_sensor_id else "your leak sensor"
         except KeyError:
             name = f"sensor {self.leak_sensor_id}"
         self.logger.info("Sending TEST leak alert (Pushover + email) ...")
@@ -345,12 +505,15 @@ class Plugin(indigo.PluginBase):
             self.logger.error("Test alert FAILED on BOTH channels — check email + Pushover config")
 
     def showPluginInfo(self, valuesDict=None, typeId=None):
-        try:
-            sensor  = indigo.devices[self.leak_sensor_id]
-            sk      = "waterLeak" if "waterLeak" in sensor.states else "onOffState"
-            sensor_line = f"{sensor.name} (ID {self.leak_sensor_id}, state '{sk}')"
-        except KeyError:
-            sensor_line = f"ID {self.leak_sensor_id} — NOT FOUND"
+        if not self.leak_sensor_id:
+            sensor_line = "none chosen yet"
+        else:
+            try:
+                sensor  = indigo.devices[self.leak_sensor_id]
+                sk      = "waterLeak" if "waterLeak" in sensor.states else "onOffState"
+                sensor_line = f"{sensor.name} (ID {self.leak_sensor_id}, state '{sk}')"
+            except KeyError:
+                sensor_line = f"ID {self.leak_sensor_id} — NOT FOUND"
         extras = [
             ("Monitored sensor:",  sensor_line),
             ("Alert email:",       self.email_to or "(not set)"),

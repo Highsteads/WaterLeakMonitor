@@ -2,7 +2,7 @@
 
 **Watch a water leak sensor from Indigo, and get a Pushover message and an email the moment it finds water.**
 
-**Version:** 1.9.3 | **Author:** CliveS & Claude | **Needs:** Indigo 2022.1 or later, a leak sensor in Indigo, and the Pushover plugin or Email+ set up
+**Version:** 1.10.0 | **Author:** CliveS & Claude | **Needs:** Indigo 2022.1 or later, a leak sensor in Indigo, and the Pushover plugin or Email+ set up
 
 **[Read the full guide](https://highsteads.github.io/WaterLeakMonitor/)** — setting up, what the alerts look like, and what to do when something goes wrong.
 
@@ -17,6 +17,7 @@ This plugin lets [Indigo](https://www.indigodomo.com) keep watch on a water leak
 - **Sends a Pushover message and an email** naming the sensor and the time. The Pushover message goes at high priority and makes the phone vibrate.
 - **Keeps trying if an alert cannot be sent.** If neither the email nor the Pushover message goes out, the plugin tries again every minute while the sensor is wet, so a real leak is never lost because your mail was down.
 - **Can repeat the alert** every so many minutes while the sensor stays wet.
+- **Tells you when the sensor stops answering,** and again when it is back, so a flat battery cannot leave the house unwatched without you knowing.
 - **Sends a test alert** from the Plugins menu, so you can check both reach you without a real leak.
 
 ## What it works with
@@ -43,11 +44,11 @@ The [full guide](https://highsteads.github.io/WaterLeakMonitor/) goes through ea
 
 ## What's new
 
+**v1.10.0** — The plugin now tells you when your leak sensor stops answering, and again when it is back. The sensor box in the settings starts empty instead of holding my own sensor's number.
+
 **v1.9.3** — The plugin carries a note of where its code lives on GitHub, the same way other Indigo plugins do. Nothing else changed.
 
 **v1.9.2** — The help text in the settings window is no longer cut off part way through. No setting or behaviour changed.
-
-**v1.9.1** — A tidy-up of the code shared with my other plugins. A log line can no longer come out with the time printed twice.
 
 Every version is listed in the [version history](https://highsteads.github.io/WaterLeakMonitor/changelog.html).
 

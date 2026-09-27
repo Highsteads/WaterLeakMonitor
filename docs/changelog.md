@@ -7,6 +7,13 @@ nav_order: 8
 
 The newest version is at the top.
 
+## 1.10.0 — 27 September 2026
+
+- If your leak sensor stops answering Indigo, or you disable it, the plugin now tells you with a line in the Event Log, a Pushover message and an email. It tells you again when the sensor is back. A sensor that keeps dropping in and out sends no more than one of these every half an hour.
+- The **Leak Sensor Device ID** box starts empty. It used to start with the number of my own sensor, which does not exist on anyone else's system, so a new install filled the Event Log with a red "Leak sensor not found" line every two seconds. An empty box now means no sensor has been chosen, and the Event Log says so once.
+- If the number in the box matches no device, the red "Leak sensor not found" line now comes once an hour instead of every two seconds.
+- If you upgrade and had never changed that box, open **Configure** and paste in your sensor's number, as the plugin watches nothing until you do.
+
 ## 1.9.3 — 11 September 2026
 
 The plugin carries a note of where its code lives on GitHub, the same way other Indigo plugins do. Nothing else changed.

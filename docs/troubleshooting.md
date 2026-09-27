@@ -7,14 +7,18 @@ nav_order: 7
 
 Each section starts with what you see, then what it means and what to do.
 
-## The log says "Leak sensor not found" every two seconds
+## The log says "No leak sensor chosen yet"
 
-The number in **Leak Sensor Device ID** does not match any device in Indigo, so nothing is being watched.
+The **Leak Sensor Device ID** box is empty, so nothing is being watched. Right-click your leak sensor in Indigo's main window, choose **Copy ID**, and paste the number into **Plugins → Water Leak Monitor → Configure → Leak Sensor Device ID**.
+
+## The log says "Leak sensor not found"
+
+The number in **Leak Sensor Device ID** does not match any device in Indigo, so nothing is being watched. The red line comes back once an hour until you put it right.
 
 - Right-click your leak sensor in Indigo's main window, choose **Copy ID**, and paste the number into **Plugins → Water Leak Monitor → Configure → Leak Sensor Device ID**.
 - If you deleted the sensor and added it again, it has a new ID number, so copy the new one.
 
-The lines stop as soon as you click **Save** with the right number.
+When you click **Save** with the right number, the lines stop.
 
 ## The log says "No alert email configured"
 
@@ -43,9 +47,11 @@ The plugin handed the alerts over without an error, so the trouble lies further 
 
 Neither Email+ nor the Pushover plugin would take the alert. The Event Log lines just above say why for each one. The two sections above cover the usual causes.
 
-## My sensor stopped answering and I was not told
+## I was told my leak sensor is not answering
 
-The plugin does not report a sensor that has gone quiet or into error — it only watches for water. While the sensor is in error it sends no alerts. Keep an eye on the sensor in Indigo's device list, and check its battery if it runs on one.
+Indigo shows the sensor with an error, or it is disabled, so the plugin cannot see whether it is wet, and no leak alert can go out until it is back. Check its battery if it runs on one, and that the plugin it belongs to, such as Zigbee2MQTT or Z-Wave, is running. You get another message when the sensor answers again.
+
+If these messages come often, the sensor is dropping in and out. The plugin sends no more than one every half an hour, but it is worth moving the sensor closer to a repeater or fitting a fresh battery.
 
 ## I keep getting the same alert every few minutes
 

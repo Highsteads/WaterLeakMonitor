@@ -6,7 +6,7 @@
 #              stubbed indigo + a fake sensor, with NO Indigo runtime.
 # Author:      CliveS & Claude Opus 4.8
 # Date:        18-07-2026
-# Version:     1.0
+# Version:     1.1  (27-09-2026: sensor-offline notices, no personal default sensor)
 #
 # Run:  python3 -m pytest test_plugin.py -q
 
@@ -14,7 +14,8 @@ import os
 import sys
 import types
 import unittest
-from unittest.mock import MagicMock
+import xml.etree.ElementTree as ET
+from unittest.mock import MagicMock, patch
 
 # --- stub indigo BEFORE importing plugin.py ---
 _ind = types.ModuleType("indigo")
@@ -38,11 +39,15 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import plugin as wlm   # noqa: E402
 
+# A made-up device ID for the tests. The plugin has no default sensor (v1.10).
+SENSOR_ID = 1234567
+
 
 class FakeSensor:
     def __init__(self, name="Bathroom Boiler Leak Sensor", states=None, error=None):
         self.name = name
         self.errorState = error
+        self.enabled = True
         self.states = states if states is not None else {"waterLeak": False}
         self._on = states.get("onOffState") if states else False
 
@@ -60,7 +65,14 @@ def make_plugin(email="x@example.com", realert_minutes=0):
     p._alert_retry_at = 0.0
     p._realert_at = 0.0
     p.realert_minutes = realert_minutes
-    p.leak_sensor_id = wlm.DEFAULT_LEAK_SENSOR_ID
+    p.leak_sensor_id = SENSOR_ID
+    p._sensor_id_raw = str(SENSOR_ID)
+    p._offline_since = None
+    p._offline_notified = False
+    p._offline_notice_next = 0.0
+    p._sensor_missing = False
+    p._missing_log_next = 0.0
+    p._config_note_logged = False
     p.email_to = email
     p.email_subject = "leak"
     p.sleep = lambda _s: None
@@ -116,7 +128,7 @@ class TestAlertDeliveryLatch(unittest.TestCase):
         wlm.QUICK_RETEST_DELAY = 0
         wlm.ALERT_RETRY_BACKOFF = 0
         self.sensor = FakeSensor(states={"waterLeak": True})
-        _ind.devices[wlm.DEFAULT_LEAK_SENSOR_ID] = self.sensor
+        _ind.devices[SENSOR_ID] = self.sensor
         self.p = make_plugin()
 
     def _enable_pushover(self, ok=True):
@@ -169,7 +181,7 @@ class TestStateMachine(unittest.TestCase):
         wlm.QUICK_RETEST_DELAY = 0
         wlm.ALERT_RETRY_BACKOFF = 0
         self.sensor = FakeSensor(states={"waterLeak": False})
-        _ind.devices[wlm.DEFAULT_LEAK_SENSOR_ID] = self.sensor
+        _ind.devices[SENSOR_ID] = self.sensor
         self.p = make_plugin()
 
     def test_no_alert_when_clear(self):
@@ -226,7 +238,7 @@ class TestReAlertEscalation(unittest.TestCase):
         wlm.QUICK_RETEST_DELAY = 0
         wlm.ALERT_RETRY_BACKOFF = 0
         self.sensor = FakeSensor(states={"waterLeak": True})
-        _ind.devices[wlm.DEFAULT_LEAK_SENSOR_ID] = self.sensor
+        _ind.devices[SENSOR_ID] = self.sensor
 
     def test_realert_off_alerts_once(self):
         p = make_plugin(realert_minutes=0)
@@ -256,7 +268,7 @@ class TestSendTestAlert(unittest.TestCase):
         _reset_server()
         self.sensor = FakeSensor(name="Kitchen Under Sink Water Sensor",
                                  states={"onOffState": False})
-        _ind.devices[wlm.DEFAULT_LEAK_SENSOR_ID] = self.sensor
+        _ind.devices[SENSOR_ID] = self.sensor
 
     def test_test_alert_sends_with_test_label(self):
         p = make_plugin()
@@ -286,6 +298,159 @@ class TestTickIsolation(unittest.TestCase):
         p.runConcurrentThread()   # must return cleanly, not raise ValueError
         self.assertGreaterEqual(calls["n"], 2)
         p.logger.error.assert_called()
+
+
+def _logged(mock_method, text):
+    """How many calls to a logger method mention `text`."""
+    return sum(1 for c in mock_method.call_args_list if text in str(c.args[0]))
+
+
+class TestSensorUnavailableNotice(unittest.TestCase):
+    """v1.10: a sensor in error (or disabled) is reported ONCE — WARNING +
+    Pushover/email — and again when it is back. It used to be a silent debug."""
+
+    def setUp(self):
+        _reset_server()
+        wlm.QUICK_RETEST_DELAY = 0
+        wlm.ALERT_RETRY_BACKOFF = 0
+        self.sensor = FakeSensor(name="Kitchen Under Sink Water Sensor",
+                                 states={"waterLeak": False})
+        _ind.devices[SENSOR_ID] = self.sensor
+        self.p = make_plugin()
+        self.po = MagicMock()
+        self.po.isEnabled.return_value = True
+        _ind.server.getPlugin.return_value = self.po
+
+    def test_error_warns_and_notifies_once(self):
+        self.sensor.errorState = "no ack"
+        for _ in range(5):
+            self.p._check_leak_sensor()
+        self.assertEqual(_logged(self.p.logger.warning, "not answering"), 1)
+        self.assertEqual(_ind.server.sendEmailTo.call_count, 1)
+        self.assertEqual(self.po.executeAction.call_count, 1)
+        props = self.po.executeAction.call_args.kwargs["props"]
+        self.assertEqual(props["msgPriority"], "0", "a status notice is not an urgent leak alert")
+        body = _ind.server.sendEmailTo.call_args.kwargs["body"]
+        self.assertIn("Kitchen Under Sink Water Sensor", body)
+        self.assertIn("stopped answering", body)
+
+    def test_back_again_is_said_once(self):
+        self.sensor.errorState = "no ack"
+        self.p._check_leak_sensor()
+        self.sensor.errorState = None
+        for _ in range(3):
+            self.p._check_leak_sensor()
+        self.assertEqual(_logged(self.p.logger.info, "answering again"), 1)
+        self.assertEqual(_ind.server.sendEmailTo.call_count, 2)
+        self.assertIn("answering again", _ind.server.sendEmailTo.call_args.kwargs["body"])
+
+    def test_disabled_sensor_counts_as_not_answering(self):
+        self.sensor.enabled = False
+        self.p._check_leak_sensor()
+        self.assertEqual(_logged(self.p.logger.warning, "not answering"), 1)
+        self.assertEqual(_ind.server.sendEmailTo.call_count, 1)
+
+    def test_flapping_sensor_is_rate_limited(self):
+        clock = {"t": 1000.0}
+        with patch.object(wlm._time, "monotonic", lambda: clock["t"]):
+            self.sensor.errorState = "no ack"
+            self.p._check_leak_sensor()          # down notice
+            self.sensor.errorState = None
+            clock["t"] += 10
+            self.p._check_leak_sensor()          # back notice
+            self.sensor.errorState = "no ack"
+            clock["t"] += 10
+            self.p._check_leak_sensor()          # inside the gap: held back
+            self.assertEqual(_ind.server.sendEmailTo.call_count, 2)
+            clock["t"] += wlm.SENSOR_NOTICE_GAP
+            self.p._check_leak_sensor()          # still down after the gap: reported
+            self.assertEqual(_ind.server.sendEmailTo.call_count, 3)
+
+    def test_short_unreported_drop_sends_no_back_notice(self):
+        clock = {"t": 1000.0}
+        with patch.object(wlm._time, "monotonic", lambda: clock["t"]):
+            self.sensor.errorState = "no ack"
+            self.p._check_leak_sensor()
+            self.sensor.errorState = None
+            self.p._check_leak_sensor()
+            self.sensor.errorState = "no ack"
+            clock["t"] += 5
+            self.p._check_leak_sensor()          # held back by the gap
+            self.sensor.errorState = None
+            self.p._check_leak_sensor()          # user was never told, so no "back"
+        self.assertEqual(_ind.server.sendEmailTo.call_count, 2)
+
+    def test_notice_text_is_plain(self):
+        self.sensor.errorState = "no ack"
+        self.p._check_leak_sensor()
+        self.sensor.errorState = None
+        self.p._check_leak_sensor()
+        for c in _ind.server.sendEmailTo.call_args_list:
+            body = c.kwargs["body"]
+            body.encode("ascii")
+            self.assertNotIn("|", body)
+            self.assertNotIn("=", body)
+            self.assertTrue(body.endswith("."))
+
+    def test_describe_duration(self):
+        self.assertEqual(wlm._describe_duration(20), "less than a minute")
+        self.assertEqual(wlm._describe_duration(60), "a minute")
+        self.assertEqual(wlm._describe_duration(12 * 60), "12 minutes")
+        self.assertEqual(wlm._describe_duration(3 * 3600), "about 3 hours")
+
+
+class TestNoPersonalDefaultSensor(unittest.TestCase):
+    """v1.10: no author's device ID as a default. Blank = not configured,
+    said once at INFO; a missing device is an ERROR, but rate-limited."""
+
+    def setUp(self):
+        _reset_server()
+        self.p = make_plugin()
+
+    def test_config_xml_sensor_default_is_blank(self):
+        root = ET.parse(os.path.join(_HERE, "PluginConfig.xml")).getroot()
+        field = [f for f in root.iter("Field") if f.get("id") == "leakSensorId"][0]
+        self.assertEqual(field.get("defaultValue"), "")
+
+    def test_never_saved_prefs_mean_no_sensor(self):
+        p = wlm.Plugin.__new__(wlm.Plugin)
+        p.logger = MagicMock()
+        wlm.Plugin.__init__(p, "id", "Water Leak Monitor", "1", {"alertEmail": "x@example.com"})
+        self.assertEqual(p.leak_sensor_id, 0)
+
+    def test_blank_id_logged_once_at_info_never_error(self):
+        self.p.closedPrefsConfigUi({"leakSensorId": ""}, False)
+        for _ in range(5):
+            self.p._check_leak_sensor()
+        self.p.logger.error.assert_not_called()
+        self.assertEqual(_logged(self.p.logger.info, "No leak sensor chosen"), 1)
+
+    def test_not_a_number_warned_once(self):
+        self.p.closedPrefsConfigUi({"leakSensorId": "boiler"}, False)
+        for _ in range(5):
+            self.p._check_leak_sensor()
+        self.p.logger.error.assert_not_called()
+        self.assertEqual(_logged(self.p.logger.warning, "is not a number"), 1)
+
+    def test_not_found_is_rate_limited_and_recovery_logged(self):
+        missing_id = 7654321
+        _ind.devices.pop(missing_id, None)
+        clock = {"t": 1000.0}
+        with patch.object(wlm._time, "monotonic", lambda: clock["t"]):
+            self.p.closedPrefsConfigUi({"leakSensorId": str(missing_id)}, False)
+            for _ in range(10):
+                clock["t"] += 2
+                self.p._check_leak_sensor()
+            self.assertEqual(_logged(self.p.logger.error, "Leak sensor not found"), 1)
+            clock["t"] += wlm.NOT_FOUND_LOG_GAP
+            self.p._check_leak_sensor()
+            self.assertEqual(_logged(self.p.logger.error, "Leak sensor not found"), 2)
+            _ind.devices[missing_id] = FakeSensor(states={"waterLeak": False})
+            try:
+                self.p._check_leak_sensor()
+            finally:
+                _ind.devices.pop(missing_id, None)
+        self.assertEqual(_logged(self.p.logger.info, "found again"), 1)
 
 
 if __name__ == "__main__":
