@@ -5,8 +5,29 @@
 #              Pushover + Email alerts with confirmation retests to avoid
 #              false alarms.
 # Author:      CliveS & Claude Fable 5.1 & Claude Opus 5.5
-# Date:        27-09-2026
-# Version:     1.10.0
+# Date:        01-11-2026
+# Version:     1.11.0
+#
+# v1.11.0 (01-11-2026): fixes from the 1.10.0 deep review, so a real leak is
+# harder to miss.
+# * A sensor that has gone QUIET (no change in Indigo's lastChanged for
+#   staleHours, default 12) counts as "not answering", the same as one in error.
+#   A flat Zigbee battery usually just stops the reports, with no error shown.
+# * Low-battery notice (default at 20%) from a battery state whose name is a
+#   setting (default "batteryLevel", Indigo's standard). A device without that
+#   state is skipped quietly.
+# * A deleted or re-created sensor now sends the "not answering" phone/email
+#   notice as well as the hourly Event Log error.
+# * A "not answering" notice that reached nobody is retried every 5 minutes
+#   instead of being counted as told.
+# * A sensor that drops out while it reads WET sends an URGENT message (leak
+#   priority and sound), retried every minute until it goes out.
+# * Leak alerts: Pushover priority is a setting, default 2 (Emergency — the
+#   Pushover plugin repeats it every 10 minutes for up to 24 hours until you
+#   acknowledge it); sound is a setting, default "siren" (was "vibrate");
+#   re-alert default is 15 minutes (was 0). A saved setting is not changed.
+# * Changing the sensor ID clears the old sensor's "already alerted" latch, so
+#   a new sensor that is already wet is alerted.
 #
 # v1.10.0 (27-09-2026, Claude Opus 5.5): a sensor in error or disabled is now
 # reported once (WARNING + Pushover/email, at most one notice per 30 min) and
@@ -38,7 +59,7 @@
 # - Declined/deferred: monitoring MULTIPLE leak sensors at once — a valuable
 #   feature but a structural change to the (now safety-hardened + tested) state
 #   machine and the config contract, so planned as its own focused batch rather
-#   than rushed into this release. See repo CLAUDE.md.
+#   than rushed into this release.
 #
 # v1.8 (18-07-2026) — deep-review SAFETY-FIX batch:
 # - CRITICAL: a CONFIRMED leak whose alert could not be delivered is no longer
@@ -130,6 +151,19 @@ SENSOR_NOTICE_GAP   = 1800  # at most one "sensor not answering" notice per 30 m
                             # so a sensor that drops in and out cannot flood the phone.
                             # A drop that outlasts the gap is still reported.
 NOT_FOUND_LOG_GAP   = 3600  # repeat the "Leak sensor not found" error at most hourly
+NOTICE_RETRY_BACKOFF = 300  # seconds before retrying a status notice that reached nobody
+BATTERY_NOTICE_GAP  = 86400 # at most one low-battery notice per day
+BATTERY_OK_MARGIN   = 10    # battery counts as replaced once this many % above the warning
+                            # level, so a reading wobbling around it cannot flood the phone
+
+# Defaults for the v1.11.0 settings (all can be changed in Configure).
+DEFAULT_REALERT_MINUTES   = 15
+DEFAULT_STALE_HOURS       = 12
+DEFAULT_BATTERY_STATE     = "batteryLevel"   # Indigo's standard battery state
+DEFAULT_LOW_BATTERY_PCT   = 20
+DEFAULT_PUSHOVER_SOUND    = "siren"
+DEFAULT_PUSHOVER_PRIORITY = "2"              # Emergency: repeats until acknowledged
+PUSHOVER_PRIORITIES       = ("1", "2")       # the leak alert is never below High
 
 
 def _describe_duration(seconds):
@@ -152,22 +186,15 @@ class Plugin(indigo.PluginBase):
         self.alert_sent        = False   # True only once an alert has been DELIVERED
         self._alert_retry_at   = 0.0     # monotonic time of the next delivery retry
         self._realert_at       = 0.0     # monotonic time of the next re-alert (escalation)
-        self.realert_minutes   = _as_int(pluginPrefs.get("reAlertMinutes"), 0)
         self.timestamp_enabled = bool(pluginPrefs.get("timestampEnabled", True))
+        self._apply_settings(pluginPrefs)
 
         if install_timestamp_filter:
             self._ts_filter = install_timestamp_filter(self, enabled=self.timestamp_enabled)
         else:
             self._ts_filter = None
 
-        # Sensor-watch bookkeeping (v1.10.0): offline notices, not-found rate limit,
-        # and the once-only "not configured" note.
-        self._offline_since       = None    # monotonic time the sensor went unavailable
-        self._offline_notified    = False   # user told it is down, not yet told it is back
-        self._offline_notice_next = 0.0     # earliest monotonic time for another down notice
-        self._sensor_missing      = False
-        self._missing_log_next    = 0.0
-        self._config_note_logged  = False
+        self._init_watch_state()
 
         # Resolve config: IndigoSecrets first, then PluginConfig. A blank sensor
         # ID resolves to 0, which means "not configured" (no personal default).
@@ -184,10 +211,46 @@ class Plugin(indigo.PluginBase):
 
         # Startup banner moved to showPluginInfo on demand (revised 25-May-2026 per Jay).
 
+    def _init_watch_state(self):
+        """Sensor-watch bookkeeping: offline notices (v1.10.0), not-found rate
+        limit, the once-only "not configured" note, and (v1.11.0) the wet-drop
+        and low-battery notices."""
+        self._offline_since       = None    # monotonic time the sensor went unavailable
+        self._offline_notified    = False   # user told it is down, not yet told it is back
+        self._offline_notice_next = 0.0     # earliest monotonic time for another down notice
+        self._sensor_missing      = False
+        self._missing_log_next    = 0.0
+        self._config_note_logged  = False
+        self._last_sensor_name    = ""      # remembered so a deleted sensor can be named
+        self._wet_drop_pending    = False   # sensor dropped out while WET, urgent notice owed
+        self._wet_drop_retry_at   = 0.0
+        self._battery_low         = False
+        self._battery_notice_next = 0.0
+
+    def _apply_settings(self, prefs):
+        """Read the alert and sensor-health settings from pluginPrefs or the
+        Configure dialog. A setting never saved takes its default; a box the
+        user cleared takes the default too, except Battery State Name, where
+        blank means "do not check the battery"."""
+        self.realert_minutes   = max(0, _as_int(prefs.get("reAlertMinutes"), DEFAULT_REALERT_MINUTES))
+        self.stale_hours       = max(0, _as_int(prefs.get("staleHours"), DEFAULT_STALE_HOURS))
+        self.low_battery_pct   = min(100, max(0, _as_int(prefs.get("lowBatteryPercent"), DEFAULT_LOW_BATTERY_PCT)))
+        raw_state              = prefs.get("batteryStateName")
+        self.battery_state     = DEFAULT_BATTERY_STATE if raw_state is None else str(raw_state).strip()
+        self.pushover_sound    = str(prefs.get("pushoverSound") or "").strip() or DEFAULT_PUSHOVER_SOUND
+        priority               = str(prefs.get("pushoverPriority") or "").strip()
+        self.pushover_priority = priority if priority in PUSHOVER_PRIORITIES else DEFAULT_PUSHOVER_PRIORITY
+
     def startup(self):
         self.logger.info(f"Water Leak Monitor started — sensor ID: {self.leak_sensor_id or '(none chosen)'}")
         self.logger.info(f"Poll interval: {POLL_INTERVAL}s | Retests: {QUICK_RETEST_COUNT} x {QUICK_RETEST_DELAY}s")
         self.logger.info(f"Alert email: {self.email_to or '(not set)'}")
+        realert_text = f"{self.realert_minutes} min" if self.realert_minutes > 0 else "off"
+        quiet_text   = f"{self.stale_hours} h" if self.stale_hours > 0 else "off"
+        self.logger.info(
+            f"Re-alert: {realert_text} | Pushover priority {self.pushover_priority} | "
+            f"Quiet alarm: {quiet_text}"
+        )
 
     def shutdown(self):
         self.logger.info("Water Leak Monitor stopped")
@@ -198,9 +261,14 @@ class Plugin(indigo.PluginBase):
         self.debug           = valuesDict.get("showDebugInfo", False)
         new_sensor_id        = _as_int(valuesDict.get("leakSensorId"), 0)
         if new_sensor_id != self.leak_sensor_id:
-            # A different sensor: forget the old one's offline history.
-            self._offline_since    = None
-            self._offline_notified = False
+            # A different sensor: forget everything about the old one, including
+            # its "already alerted" latch — otherwise a new sensor that is
+            # already wet would never be alerted (v1.11.0).
+            self._init_watch_state()
+            self.alert_sent        = False
+            self.last_sensor_state = None
+            self._alert_retry_at   = 0.0
+            self._realert_at       = 0.0
         self._sensor_id_raw      = valuesDict.get("leakSensorId", "")
         self.leak_sensor_id      = new_sensor_id
         self._sensor_missing     = False
@@ -208,7 +276,7 @@ class Plugin(indigo.PluginBase):
         self._config_note_logged = False
         self.email_to        = _SECRETS_EMAIL or valuesDict.get("alertEmail", "")
         self.email_subject   = valuesDict.get("alertSubject", "") or DEFAULT_EMAIL_SUBJECT
-        self.realert_minutes = _as_int(valuesDict.get("reAlertMinutes"), 0)
+        self._apply_settings(valuesDict)
         self.logger.info("Plugin configuration updated")
 
     def runConcurrentThread(self):
@@ -266,54 +334,165 @@ class Plugin(indigo.PluginBase):
                 "into Leak Sensor Device ID in Plugins -> Water Leak Monitor -> Configure."
             )
 
+    def _quiet_reason(self, sensor):
+        """v1.11.0: "" unless the sensor has gone quiet — Indigo's lastChanged
+        is older than stale_hours. A flat Zigbee battery usually just stops the
+        reports, leaving the last ("dry") state and no error. Off when
+        stale_hours is 0; skipped quietly if lastChanged is missing or is not
+        a date/time this code can compare."""
+        if self.stale_hours <= 0:
+            return ""
+        last = getattr(sensor, "lastChanged", None)
+        if not isinstance(last, datetime):
+            return ""
+        try:
+            age = (datetime.now() - last).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return ""   # e.g. a timezone-aware value; never let this check break the tick
+        if age < self.stale_hours * 3600:
+            return ""
+        return f"no change reported for {_describe_duration(age)}"
+
+    def _check_battery(self, sensor):
+        """v1.11.0: a status notice when the battery state is at or below
+        low_battery_pct — at most one a day, retried if it reached nobody.
+        Skipped quietly when the check is off, the device has no state of that
+        name, or the value is not a number."""
+        if self.low_battery_pct <= 0 or not self.battery_state:
+            return
+        try:
+            states = sensor.states
+            if self.battery_state not in states:
+                return
+            level = float(str(states.get(self.battery_state)).strip())
+        except (TypeError, ValueError, AttributeError):
+            return
+        if level != level:   # NaN
+            return
+        if level > self.low_battery_pct:
+            if self._battery_low and level >= self.low_battery_pct + BATTERY_OK_MARGIN:
+                self._battery_low         = False
+                self._battery_notice_next = 0.0
+                self.logger.info(f"Leak sensor '{sensor.name}' battery is at {level:.0f}% — OK again")
+            return
+        now = _time.monotonic()
+        if not self._battery_low:
+            self._battery_low = True
+            self.logger.warning(
+                f"Leak sensor '{sensor.name}' battery is low ({level:.0f}%) — replace it soon"
+            )
+        if now < self._battery_notice_next:
+            return
+        sent = self._send_status_notice(
+            "Leak sensor battery low",
+            f"The battery in {sensor.name} is at {level:.0f} percent. Replace it soon: when it "
+            f"runs flat the sensor goes quiet and cannot report a leak.",
+        )
+        self._battery_notice_next = now + (BATTERY_NOTICE_GAP if sent else NOTICE_RETRY_BACKOFF)
+
     def _note_sensor_missing(self):
-        """The configured ID matches no device. Rate-limited ERROR."""
+        """The configured ID matches no device (deleted, or re-created with a
+        new ID). Rate-limited ERROR in the log, and (v1.11.0) the same phone/
+        email "not answering" notice as a sensor in error."""
         self._sensor_missing = True
         now = _time.monotonic()
-        if now < self._missing_log_next:
-            return
-        self._missing_log_next = now + NOT_FOUND_LOG_GAP
-        self.logger.error(
-            f"Leak sensor not found (ID: {self.leak_sensor_id}) — nothing is being watched. "
-            f"Check Leak Sensor Device ID in Configure. (Repeats hourly until fixed.)"
+        if now >= self._missing_log_next:
+            self._missing_log_next = now + NOT_FOUND_LOG_GAP
+            self.logger.error(
+                f"Leak sensor not found (ID: {self.leak_sensor_id}) — nothing is being watched. "
+                f"Check Leak Sensor Device ID in Configure. (Repeats hourly until fixed.)"
+            )
+        name = self._last_sensor_name or f"The leak sensor (ID {self.leak_sensor_id})"
+        self._handle_unavailable(
+            name, f"Indigo has no device with ID {self.leak_sensor_id}, so it may have been deleted or re-created"
         )
 
-    def _note_sensor_unavailable(self, sensor, reason):
-        """The sensor is in error or disabled. Tell the user once (WARNING +
-        Pushover/email), no more than once per SENSOR_NOTICE_GAP."""
+    def _handle_unavailable(self, name, reason):
+        """The sensor cannot be read (error, disabled, quiet or missing):
+        drop the leak latch, tell the user, and if its last reading was WET
+        owe them an urgent message."""
+        if self.last_sensor_state:
+            self._wet_drop_pending  = True
+            self._wet_drop_retry_at = 0.0
+        if self.alert_sent or self.last_sensor_state:
+            self.logger.debug("Sensor unavailable — resetting leak state")
+        self.alert_sent        = False
+        self.last_sensor_state = None
+        self._note_sensor_unavailable(name, reason)
+        self._send_wet_drop_notice(name, reason)
+
+    def _send_wet_drop_notice(self, name, reason):
+        """v1.11.0: the sensor read WET and then stopped answering. Send an
+        urgent message (leak priority and sound); retry every
+        ALERT_RETRY_BACKOFF until it goes out or the sensor is back."""
+        now = _time.monotonic()
+        if not self._wet_drop_pending or now < self._wet_drop_retry_at:
+            return
+        self.logger.error(
+            f"[!] Leak sensor '{name}' stopped answering while it read WET ({reason}) — "
+            f"go and look"
+        )
+        sent = self._send_status_notice(
+            "[URGENT] Leak sensor lost while WET",
+            f"The last reading from {name} was WET, and it has now stopped answering "
+            f"({reason}). Water Leak Monitor cannot tell whether water is still there. "
+            f"Go and look.",
+            urgent=True,
+        )
+        if sent:
+            self._wet_drop_pending = False
+        else:
+            self._wet_drop_retry_at = now + ALERT_RETRY_BACKOFF
+            self.logger.error(
+                f"[!] Could not send the WET sensor message by email or Pushover — "
+                f"retrying in {ALERT_RETRY_BACKOFF}s"
+            )
+
+    def _note_sensor_unavailable(self, name, reason):
+        """The sensor cannot be read. Tell the user once (WARNING +
+        Pushover/email), no more than once per SENSOR_NOTICE_GAP. A notice
+        that reached nobody is retried after NOTICE_RETRY_BACKOFF (v1.11.0)
+        instead of being counted as told."""
         now = _time.monotonic()
         if self._offline_since is None:
             self._offline_since = now
         if self._offline_notified or now < self._offline_notice_next:
             return
-        self._offline_notified    = True
-        self._offline_notice_next = now + SENSOR_NOTICE_GAP
         self.logger.warning(
-            f"Leak sensor '{sensor.name}' is not answering ({reason}) — a leak cannot be "
+            f"Leak sensor '{name}' is not answering ({reason}) — a leak cannot be "
             f"seen until it is back"
         )
-        self._send_status_notice(
+        sent = self._send_status_notice(
             "Leak sensor not answering",
-            f"{sensor.name} has stopped answering, so Water Leak Monitor cannot see whether "
-            f"it is wet. Indigo shows it as \"{reason}\". You will get another message "
-            f"when it is back.",
+            f"{name} has stopped answering, so Water Leak Monitor cannot see whether "
+            f"it is wet ({reason}). You will get another message when it is back.",
         )
+        if sent:
+            self._offline_notified    = True
+            self._offline_notice_next = now + SENSOR_NOTICE_GAP
+        else:
+            self._offline_notice_next = now + NOTICE_RETRY_BACKOFF
+            self.logger.warning(
+                f"The 'not answering' message could not be sent by email or Pushover — "
+                f"trying again in {NOTICE_RETRY_BACKOFF // 60} minutes"
+            )
 
-    def _note_sensor_back(self, sensor):
+    def _note_sensor_back(self, name):
         """The sensor answers again after being unavailable. If the user was
         told it was down, tell them it is back (INFO + Pushover/email)."""
+        self._wet_drop_pending = False
         if self._offline_since is None:
             return
         away = _time.monotonic() - self._offline_since
         self._offline_since = None
         if not self._offline_notified:
-            self.logger.debug(f"Leak sensor '{sensor.name}' answered again after a short drop")
+            self.logger.debug(f"Leak sensor '{name}' answered again after a short drop")
             return
         self._offline_notified = False
-        self.logger.info(f"Leak sensor '{sensor.name}' is answering again — watching resumed")
+        self.logger.info(f"Leak sensor '{name}' is answering again — watching resumed")
         self._send_status_notice(
             "Leak sensor back",
-            f"{sensor.name} is answering again after {_describe_duration(away)}, and "
+            f"{name} is answering again after {_describe_duration(away)}, and "
             f"Water Leak Monitor is watching it once more.",
         )
 
@@ -332,16 +511,14 @@ class Plugin(indigo.PluginBase):
             self._sensor_missing   = False
             self._missing_log_next = 0.0
             self.logger.info(f"Leak sensor found again (ID: {self.leak_sensor_id}) — watching resumed")
+        self._last_sensor_name = sensor.name
 
-        reason = self._unavailable_reason(sensor)
+        reason = self._unavailable_reason(sensor) or self._quiet_reason(sensor)
         if reason:
-            if self.alert_sent or self.last_sensor_state:
-                self.logger.debug("Sensor unavailable — resetting leak state")
-            self.alert_sent        = False
-            self.last_sensor_state = None
-            self._note_sensor_unavailable(sensor, reason)
+            self._handle_unavailable(sensor.name, reason)
             return
-        self._note_sensor_back(sensor)
+        self._note_sensor_back(sensor.name)
+        self._check_battery(sensor)
 
         current_state = self._leak_state(sensor)
 
@@ -448,8 +625,8 @@ class Plugin(indigo.PluginBase):
             pushover.executeAction("send", props={
                 "msgTitle":    "[URGENT] Water Leak",
                 "msgBody":     f"LEAK DETECTED at {location}\nTime: {timestamp}",
-                "msgPriority": "1",
-                "msgSound":    "vibrate",
+                "msgPriority": self.pushover_priority,
+                "msgSound":    self.pushover_sound,
             })
             self.logger.info("[OK] Pushover alert sent")
             return True
@@ -457,9 +634,11 @@ class Plugin(indigo.PluginBase):
             self.logger.error(f"Failed to send Pushover alert: {exc}")
             return False
 
-    def _send_status_notice(self, title, body):
-        """Send a sensor-status notice (not a leak): email + normal-priority
-        Pushover. Returns True if at least one channel accepted it."""
+    def _send_status_notice(self, title, body, urgent=False):
+        """Send a sensor-status notice: email + Pushover. Normal priority and
+        vibrate, unless urgent (v1.11.0: the sensor dropped out while WET),
+        which uses the leak alert's priority and sound. Returns True if at
+        least one channel accepted it."""
         email_ok = False
         if self.email_to:
             try:
@@ -474,14 +653,14 @@ class Plugin(indigo.PluginBase):
                 pushover.executeAction("send", props={
                     "msgTitle":    title,
                     "msgBody":     body,
-                    "msgPriority": "0",
-                    "msgSound":    "vibrate",
+                    "msgPriority": self.pushover_priority if urgent else "0",
+                    "msgSound":    self.pushover_sound if urgent else "vibrate",
                 })
                 push_ok = True
         except Exception as exc:
             self.logger.error(f"Failed to send sensor status Pushover message: {exc}")
         if not (email_ok or push_ok):
-            self.logger.debug(f"Sensor status notice '{title}' went nowhere (no email or Pushover available)")
+            self.logger.warning(f"Sensor status message '{title}' reached nobody (no email or Pushover worked)")
         return email_ok or push_ok
 
     # ----------------------------------------------------------------
@@ -518,6 +697,10 @@ class Plugin(indigo.PluginBase):
             ("Monitored sensor:",  sensor_line),
             ("Alert email:",       self.email_to or "(not set)"),
             ("Re-alert every:",    f"{self.realert_minutes} min" if self.realert_minutes > 0 else "off"),
+            ("Pushover alert:",    f"priority {self.pushover_priority}, sound '{self.pushover_sound}'"),
+            ("Quiet alarm after:", f"{self.stale_hours} h" if self.stale_hours > 0 else "off"),
+            ("Low battery at:",    f"{self.low_battery_pct}% of '{self.battery_state}'"
+                                   if self.low_battery_pct > 0 and self.battery_state else "off"),
             ("Timestamps in Log:", "ON" if self.timestamp_enabled else "OFF"),
         ]
         if log_startup_banner:
