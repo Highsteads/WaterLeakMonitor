@@ -140,3 +140,40 @@ def test_debug_pref_from_the_configure_dialog(monkeypatch):
     plugin = _plugin_with(monkeypatch, {})
     plugin.closedPrefsConfigUi({"showDebugInfo": "false", "leakSensorId": ""}, False)
     assert plugin.debug is False
+
+
+# ── the confirmation retest (v1.10.2) ───────────────────────────────────────
+
+@pytest.mark.parametrize("change", ["disabled", "bridge down", "offline"])
+def test_a_sensor_lost_during_the_retest_cancels_the_alert(setup, change):
+    """The retest uses the same test as the main loop: an error OR disabled.
+    Before 1.10.2 a sensor disabled in the 5 s window still confirmed a leak."""
+    plugin, sensor, pushover = setup
+    sensor.states["waterLeak"] = True
+
+    def lose_it(_seconds):
+        if change == "disabled":
+            sensor.enabled = False
+        else:
+            sensor.errorState = change
+    plugin.sleep = lose_it
+    plugin._check_leak_sensor()
+    assert _urgent_alerts(pushover) == []
+    assert plugin.alert_sent is False
+
+
+def test_after_a_cancelled_retest_the_user_is_told_it_is_not_answering(setup):
+    plugin, sensor, pushover = setup
+    sensor.states["waterLeak"] = True
+    plugin.sleep = lambda _s: setattr(sensor, "enabled", False)
+    plugin._check_leak_sensor()
+    plugin._check_leak_sensor()          # the next tick sees it disabled
+    titles = [c.kwargs["props"]["msgTitle"] for c in pushover.executeAction.call_args_list]
+    assert titles == ["Leak sensor not answering"]
+
+
+def test_a_sensor_still_fine_after_the_retest_confirms(setup):
+    plugin, sensor, pushover = setup
+    sensor.states["waterLeak"] = True
+    plugin._check_leak_sensor()
+    assert len(_urgent_alerts(pushover)) == 1

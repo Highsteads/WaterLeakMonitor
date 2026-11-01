@@ -2,7 +2,7 @@
 
 **Watch a water leak sensor from Indigo, and get a Pushover message and an email the moment it finds water.**
 
-**Version:** 1.10.1 | **Author:** CliveS & Claude | **Needs:** Indigo 2022.1 or later, a leak sensor in Indigo, and the Pushover plugin or Email+ set up
+**Version:** 1.10.2 | **Author:** CliveS & Claude | **Needs:** Indigo 2022.1 or later, a leak sensor in Indigo, and the Pushover plugin or Email+ set up
 
 **[Read the full guide](https://highsteads.github.io/WaterLeakMonitor/)** — setting up, what the alerts look like, and what to do when something goes wrong.
 
@@ -43,6 +43,8 @@ You need at least one of Pushover and Email+, and I recommend both.
 The [full guide](https://highsteads.github.io/WaterLeakMonitor/) goes through each step, explains every setting, and covers what to do if something does not work.
 
 ## What's new
+
+**v1.10.2** — A leak sensor disabled during the five-second check is no longer read as if it were working. Nothing else changed.
 
 **v1.10.1** — Turning **Timestamps in Log** off now stays off. Nothing else changed.
 
