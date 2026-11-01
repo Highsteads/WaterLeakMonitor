@@ -7,6 +7,10 @@ nav_order: 8
 
 The newest version is at the top.
 
+## 1.10.2 — 1 November 2026
+
+- When the plugin re-checks a leak five seconds after first seeing it, it now treats a sensor you have disabled in Indigo the same way as one that has stopped answering. Before, it only checked for an error, so a disabled sensor's last reading could still confirm a leak. Nothing else changed.
+
 ## 1.10.1 — 1 November 2026
 
 - Turning **Timestamps in Log** off now stays off. Indigo can hand a saved setting back as the word "false", which the plugin read as "on". The **Show Debug Info** setting is read the same careful way now too. Nothing else changed.

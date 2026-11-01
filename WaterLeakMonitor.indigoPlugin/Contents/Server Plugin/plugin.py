@@ -6,7 +6,12 @@
 #              false alarms.
 # Author:      CliveS & Claude Fable 5.1 & Claude Opus 5.5
 # Date:        01-11-2026
-# Version:     1.10.1
+# Version:     1.10.2
+#
+# v1.10.2 (01-11-2026, Claude Opus 5.5): the leak confirmation retest uses the
+# same _unavailable_reason() test as the main loop. It checked only the error
+# state, so a sensor disabled during the 5 s window was still read as live and
+# its last reading could confirm a leak. Found in the 01-11-2026 review.
 #
 # v1.10.1 (01-11-2026, Claude Opus 5.5): the Timestamps and Show Debug Info
 # settings are read with plugin_utils.as_bool() instead of bool(). Indigo can
@@ -412,8 +417,13 @@ class Plugin(indigo.PluginBase):
 
             try:
                 sensor = indigo.devices[self.leak_sensor_id]
-                if getattr(sensor, "errorState", None):
-                    self.logger.info(f"Sensor unavailable on retest {test_num} — cancelling")
+                # The same test as the main loop (v1.10.2): an error OR a
+                # disabled sensor. Only the error was checked here, so a sensor
+                # disabled during the 5 s window was still read as live.
+                reason = self._unavailable_reason(sensor)
+                if reason:
+                    self.logger.info(f"Sensor unavailable on retest {test_num} "
+                                     f"({reason}) — cancelling")
                     return False
                 if not self._leak_state(sensor):
                     self.logger.info(f"Leak cleared on retest {test_num} — false alarm")
