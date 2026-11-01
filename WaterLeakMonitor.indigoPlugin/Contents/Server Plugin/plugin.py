@@ -5,8 +5,14 @@
 #              Pushover + Email alerts with confirmation retests to avoid
 #              false alarms.
 # Author:      CliveS & Claude Fable 5.1 & Claude Opus 5.5
-# Date:        27-09-2026
-# Version:     1.10.0
+# Date:        01-11-2026
+# Version:     1.10.1
+#
+# v1.10.1 (01-11-2026, Claude Opus 5.5): the Timestamps and Show Debug Info
+# settings are read with plugin_utils.as_bool() instead of bool(). Indigo can
+# hand a saved checkbox back as the string "false", and bool("false") is True,
+# so Timestamps could not be turned off (the 1.9.1 note below describes the
+# trap; as_bool existed but was not used here). Found in the 01-11-2026 review.
 #
 # v1.10.0 (27-09-2026, Claude Opus 5.5): a sensor in error or disabled is now
 # reported once (WARNING + Pushover/email, at most one notice per 30 min) and
@@ -93,6 +99,19 @@ try:
     from plugin_utils import install_timestamp_filter
 except ImportError:
     install_timestamp_filter = None
+try:
+    from plugin_utils import as_bool
+except ImportError:
+    def as_bool(value, default=False):
+        """Fallback if plugin_utils is missing: never let "false" read as True."""
+        if isinstance(value, bool):
+            return value
+        s = str(value).strip().lower() if value is not None else ""
+        if s in ("true", "1", "yes", "on"):
+            return True
+        if s in ("false", "0", "no", "off"):
+            return False
+        return default
 
 _sys.path.insert(0, "/Library/Application Support/Perceptive Automation")
 try:
@@ -147,13 +166,13 @@ def _describe_duration(seconds):
 class Plugin(indigo.PluginBase):
     def __init__(self, pluginId, pluginDisplayName, pluginVersion, pluginPrefs):
         super(Plugin, self).__init__(pluginId, pluginDisplayName, pluginVersion, pluginPrefs)
-        self.debug             = pluginPrefs.get("showDebugInfo", False)
+        self.debug             = as_bool(pluginPrefs.get("showDebugInfo"), False)
         self.last_sensor_state = None
         self.alert_sent        = False   # True only once an alert has been DELIVERED
         self._alert_retry_at   = 0.0     # monotonic time of the next delivery retry
         self._realert_at       = 0.0     # monotonic time of the next re-alert (escalation)
         self.realert_minutes   = _as_int(pluginPrefs.get("reAlertMinutes"), 0)
-        self.timestamp_enabled = bool(pluginPrefs.get("timestampEnabled", True))
+        self.timestamp_enabled = as_bool(pluginPrefs.get("timestampEnabled"), True)
 
         if install_timestamp_filter:
             self._ts_filter = install_timestamp_filter(self, enabled=self.timestamp_enabled)
@@ -195,7 +214,7 @@ class Plugin(indigo.PluginBase):
     def closedPrefsConfigUi(self, valuesDict, userCancelled):
         if userCancelled:
             return
-        self.debug           = valuesDict.get("showDebugInfo", False)
+        self.debug           = as_bool(valuesDict.get("showDebugInfo"), False)
         new_sensor_id        = _as_int(valuesDict.get("leakSensorId"), 0)
         if new_sensor_id != self.leak_sensor_id:
             # A different sensor: forget the old one's offline history.

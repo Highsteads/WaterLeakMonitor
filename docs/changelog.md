@@ -7,6 +7,10 @@ nav_order: 8
 
 The newest version is at the top.
 
+## 1.10.1 — 1 November 2026
+
+- Turning **Timestamps in Log** off now stays off. Indigo can hand a saved setting back as the word "false", which the plugin read as "on". The **Show Debug Info** setting is read the same careful way now too. Nothing else changed.
+
 ## 1.10.0 — 27 September 2026
 
 - If your leak sensor stops answering Indigo, or you disable it, the plugin now tells you with a line in the Event Log, a Pushover message and an email. It tells you again when the sensor is back. A sensor that keeps dropping in and out sends no more than one of these every half an hour.
