@@ -6,7 +6,7 @@
 #              stubbed indigo + a fake sensor, with NO Indigo runtime.
 # Author:      CliveS & Claude Opus 4.8
 # Date:        18-07-2026
-# Version:     1.1  (27-09-2026: sensor-offline notices, no personal default sensor)
+# Version:     1.2  (01-11-2026: quiet sensor, battery, missing-sensor notice, retries, wet drop)
 #
 # Run:  python3 -m pytest test_plugin.py -q
 
@@ -15,6 +15,7 @@ import sys
 import types
 import unittest
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 # --- stub indigo BEFORE importing plugin.py ---
@@ -64,15 +65,11 @@ def make_plugin(email="x@example.com", realert_minutes=0):
     p.alert_sent = False
     p._alert_retry_at = 0.0
     p._realert_at = 0.0
+    p._apply_settings({})          # v1.11.0 defaults (priority, sound, quiet, battery)
+    p._init_watch_state()
     p.realert_minutes = realert_minutes
     p.leak_sensor_id = SENSOR_ID
     p._sensor_id_raw = str(SENSOR_ID)
-    p._offline_since = None
-    p._offline_notified = False
-    p._offline_notice_next = 0.0
-    p._sensor_missing = False
-    p._missing_log_next = 0.0
-    p._config_note_logged = False
     p.email_to = email
     p.email_subject = "leak"
     p.sleep = lambda _s: None
@@ -451,6 +448,374 @@ class TestNoPersonalDefaultSensor(unittest.TestCase):
             finally:
                 _ind.devices.pop(missing_id, None)
         self.assertEqual(_logged(self.p.logger.info, "found again"), 1)
+
+
+def _enabled_pushover():
+    po = MagicMock()
+    po.isEnabled.return_value = True
+    _ind.server.getPlugin.return_value = po
+    return po
+
+
+class TestQuietSensor(unittest.TestCase):
+    """v1.11.0: a sensor whose lastChanged is older than staleHours counts as
+    not answering — a flat Zigbee battery shows no error, it just goes quiet."""
+
+    def setUp(self):
+        _reset_server()
+        self.sensor = FakeSensor(name="Boiler Leak", states={"waterLeak": False})
+        _ind.devices[SENSOR_ID] = self.sensor
+        self.p = make_plugin()
+
+    def test_quiet_for_longer_than_limit_is_not_answering(self):
+        self.sensor.lastChanged = datetime.now() - timedelta(hours=13)
+        for _ in range(3):
+            self.p._check_leak_sensor()
+        self.assertEqual(_logged(self.p.logger.warning, "not answering"), 1)
+        self.assertEqual(_ind.server.sendEmailTo.call_count, 1)
+        self.assertIn("no change reported for about 13 hours",
+                      _ind.server.sendEmailTo.call_args.kwargs["body"])
+
+    def test_recent_change_is_fine(self):
+        self.sensor.lastChanged = datetime.now() - timedelta(hours=11)
+        self.p._check_leak_sensor()
+        _ind.server.sendEmailTo.assert_not_called()
+
+    def test_report_after_quiet_spell_says_back(self):
+        self.sensor.lastChanged = datetime.now() - timedelta(hours=13)
+        self.p._check_leak_sensor()
+        self.sensor.lastChanged = datetime.now()
+        self.p._check_leak_sensor()
+        self.assertEqual(_logged(self.p.logger.info, "answering again"), 1)
+
+    def test_zero_turns_the_check_off(self):
+        self.p.stale_hours = 0
+        self.sensor.lastChanged = datetime.now() - timedelta(days=30)
+        self.p._check_leak_sensor()
+        _ind.server.sendEmailTo.assert_not_called()
+
+    def test_missing_or_odd_lastchanged_is_skipped_quietly(self):
+        for value in (None, "yesterday", datetime.now(timezone.utc) - timedelta(days=3)):
+            self.sensor.lastChanged = value
+            self.p._check_leak_sensor()
+        _ind.server.sendEmailTo.assert_not_called()
+        self.p.logger.error.assert_not_called()
+
+    def test_quiet_wet_sensor_is_not_alerted_as_dry(self):
+        # a wet sensor that goes quiet must not be read as dry or as a fresh leak
+        self.sensor.states["waterLeak"] = True
+        wlm.QUICK_RETEST_DELAY = 0
+        self.p._check_leak_sensor()
+        self.assertTrue(self.p.alert_sent)
+        self.sensor.lastChanged = datetime.now() - timedelta(hours=13)
+        self.p._check_leak_sensor()
+        self.assertTrue(any("WET" in str(c.kwargs.get("body", ""))
+                            for c in _ind.server.sendEmailTo.call_args_list))
+
+
+class TestLowBattery(unittest.TestCase):
+    """v1.11.0: low-battery notice from a configurable state, once a day."""
+
+    def setUp(self):
+        _reset_server()
+        self.sensor = FakeSensor(name="Boiler Leak", states={"waterLeak": False, "batteryLevel": 50})
+        _ind.devices[SENSOR_ID] = self.sensor
+        self.p = make_plugin()
+
+    def test_low_battery_notified_once(self):
+        self.sensor.states["batteryLevel"] = 15
+        for _ in range(5):
+            self.p._check_leak_sensor()
+        self.assertEqual(_logged(self.p.logger.warning, "battery is low"), 1)
+        self.assertEqual(_ind.server.sendEmailTo.call_count, 1)
+        self.assertIn("15 percent", _ind.server.sendEmailTo.call_args.kwargs["body"])
+
+    def test_healthy_battery_is_quiet(self):
+        self.p._check_leak_sensor()
+        _ind.server.sendEmailTo.assert_not_called()
+
+    def test_text_value_is_understood(self):
+        self.sensor.states["batteryLevel"] = " 10 "
+        self.p._check_leak_sensor()
+        self.assertEqual(_ind.server.sendEmailTo.call_count, 1)
+
+    def test_missing_or_junk_state_is_skipped_quietly(self):
+        for states in ({"waterLeak": False}, {"waterLeak": False, "batteryLevel": None},
+                       {"waterLeak": False, "batteryLevel": "low"}):
+            self.sensor.states = states
+            self.p._check_leak_sensor()
+        _ind.server.sendEmailTo.assert_not_called()
+        self.p.logger.error.assert_not_called()
+
+    def test_custom_state_name(self):
+        self.p.battery_state = "battery"
+        self.sensor.states = {"waterLeak": False, "battery": 5}
+        self.p._check_leak_sensor()
+        self.assertEqual(_ind.server.sendEmailTo.call_count, 1)
+
+    def test_blank_state_name_or_zero_turns_it_off(self):
+        self.sensor.states["batteryLevel"] = 5
+        self.p.battery_state = ""
+        self.p._check_leak_sensor()
+        self.p.battery_state = "batteryLevel"
+        self.p.low_battery_pct = 0
+        self.p._check_leak_sensor()
+        _ind.server.sendEmailTo.assert_not_called()
+
+    def test_daily_repeat_and_new_battery(self):
+        clock = {"t": 1000.0}
+        with patch.object(wlm._time, "monotonic", lambda: clock["t"]):
+            self.sensor.states["batteryLevel"] = 15
+            self.p._check_leak_sensor()
+            self.sensor.states["batteryLevel"] = 22      # wobble just above: still low
+            self.p._check_leak_sensor()
+            self.sensor.states["batteryLevel"] = 15
+            self.p._check_leak_sensor()
+            self.assertEqual(_ind.server.sendEmailTo.call_count, 1)
+            clock["t"] += wlm.BATTERY_NOTICE_GAP
+            self.p._check_leak_sensor()
+            self.assertEqual(_ind.server.sendEmailTo.call_count, 2)
+            self.sensor.states["batteryLevel"] = 100     # new battery
+            self.p._check_leak_sensor()
+            self.assertEqual(_logged(self.p.logger.info, "OK again"), 1)
+            self.sensor.states["batteryLevel"] = 15
+            self.p._check_leak_sensor()                  # low again: told at once
+            self.assertEqual(_ind.server.sendEmailTo.call_count, 3)
+
+    def test_failed_battery_notice_is_retried(self):
+        clock = {"t": 1000.0}
+        with patch.object(wlm._time, "monotonic", lambda: clock["t"]):
+            _ind.server.sendEmailTo.side_effect = RuntimeError("smtp down")
+            self.sensor.states["batteryLevel"] = 15
+            self.p._check_leak_sensor()
+            _ind.server.sendEmailTo.side_effect = None
+            clock["t"] += wlm.NOTICE_RETRY_BACKOFF
+            self.p._check_leak_sensor()
+        self.assertEqual(_ind.server.sendEmailTo.call_count, 2)
+
+
+class TestMissingSensorNotice(unittest.TestCase):
+    """v1.11.0: a deleted / re-created sensor sends the phone + email notice."""
+
+    def setUp(self):
+        _reset_server()
+        self.sensor = FakeSensor(name="Boiler Leak", states={"waterLeak": False})
+        _ind.devices[SENSOR_ID] = self.sensor
+        self.p = make_plugin()
+        self.po = _enabled_pushover()
+
+    def tearDown(self):
+        _ind.devices[SENSOR_ID] = self.sensor
+
+    def test_deleted_sensor_is_notified_by_name_and_back_is_said(self):
+        self.p._check_leak_sensor()                 # seen once, name remembered
+        _ind.devices.pop(SENSOR_ID)
+        for _ in range(5):
+            self.p._check_leak_sensor()
+        self.assertEqual(_ind.server.sendEmailTo.call_count, 1)
+        self.assertEqual(self.po.executeAction.call_count, 1)
+        body = _ind.server.sendEmailTo.call_args.kwargs["body"]
+        self.assertIn("Boiler Leak", body)
+        self.assertIn("deleted or re-created", body)
+        _ind.devices[SENSOR_ID] = self.sensor
+        self.p._check_leak_sensor()
+        self.assertEqual(_ind.server.sendEmailTo.call_count, 2)
+        self.assertIn("answering again", _ind.server.sendEmailTo.call_args.kwargs["body"])
+
+    def test_never_seen_sensor_is_named_by_id(self):
+        _ind.devices.pop(SENSOR_ID)
+        self.p._check_leak_sensor()
+        self.assertIn(f"ID {SENSOR_ID}", _ind.server.sendEmailTo.call_args.kwargs["body"])
+
+
+class TestFailedNoticeRetried(unittest.TestCase):
+    """v1.11.0: a "not answering" notice that reached nobody is not counted
+    as told; it is retried after NOTICE_RETRY_BACKOFF."""
+
+    def setUp(self):
+        _reset_server()
+        self.sensor = FakeSensor(name="Boiler Leak", states={"waterLeak": False}, error="no ack")
+        _ind.devices[SENSOR_ID] = self.sensor
+        self.p = make_plugin()
+
+    def test_retry_until_delivered_then_stop(self):
+        clock = {"t": 1000.0}
+        with patch.object(wlm._time, "monotonic", lambda: clock["t"]):
+            _ind.server.sendEmailTo.side_effect = RuntimeError("smtp down")
+            self.p._check_leak_sensor()
+            self.assertFalse(self.p._offline_notified)
+            clock["t"] += 10
+            self.p._check_leak_sensor()                       # inside back-off: no retry
+            self.assertEqual(_ind.server.sendEmailTo.call_count, 1)
+            _ind.server.sendEmailTo.side_effect = None
+            clock["t"] += wlm.NOTICE_RETRY_BACKOFF
+            self.p._check_leak_sensor()                       # retried and delivered
+            self.assertEqual(_ind.server.sendEmailTo.call_count, 2)
+            self.assertTrue(self.p._offline_notified)
+            clock["t"] += wlm.NOTICE_RETRY_BACKOFF
+            self.p._check_leak_sensor()                       # told: no more
+            self.assertEqual(_ind.server.sendEmailTo.call_count, 2)
+
+    def test_nowhere_to_send_is_a_warning(self):
+        self.p.email_to = ""
+        self.p._check_leak_sensor()
+        self.assertEqual(_logged(self.p.logger.warning, "reached nobody"), 1)
+        self.assertFalse(self.p._offline_notified)
+
+
+class TestWetDropUrgent(unittest.TestCase):
+    """v1.11.0: a sensor that stops answering while WET sends an URGENT
+    message at the leak priority and sound, retried until it goes out."""
+
+    def setUp(self):
+        _reset_server()
+        wlm.QUICK_RETEST_DELAY = 0
+        wlm.ALERT_RETRY_BACKOFF = 60
+        self.sensor = FakeSensor(name="Boiler Leak", states={"waterLeak": True})
+        _ind.devices[SENSOR_ID] = self.sensor
+        self.p = make_plugin()
+        self.po = _enabled_pushover()
+
+    def tearDown(self):
+        wlm.ALERT_RETRY_BACKOFF = 0
+
+    def _urgent_calls(self):
+        return [c for c in self.po.executeAction.call_args_list
+                if "WET" in c.kwargs["props"]["msgTitle"]]
+
+    def test_wet_then_error_sends_urgent_once(self):
+        self.p._check_leak_sensor()
+        self.assertTrue(self.p.alert_sent)
+        self.sensor.errorState = "no ack"
+        for _ in range(4):
+            self.p._check_leak_sensor()
+        urgent = self._urgent_calls()
+        self.assertEqual(len(urgent), 1)
+        self.assertEqual(urgent[0].kwargs["props"]["msgPriority"], "2")
+        self.assertEqual(urgent[0].kwargs["props"]["msgSound"], "siren")
+        self.assertIn("WET", _ind.server.sendEmailTo.call_args_list[-2].kwargs["body"]
+                      + _ind.server.sendEmailTo.call_args_list[-1].kwargs["body"])
+
+    def test_dry_then_error_is_not_urgent(self):
+        self.sensor.states["waterLeak"] = False
+        self.p._check_leak_sensor()
+        self.sensor.errorState = "no ack"
+        self.p._check_leak_sensor()
+        self.assertEqual(self._urgent_calls(), [])
+
+    def test_error_during_confirmation_is_urgent(self):
+        orig = self.p._quick_confirm_leak
+
+        def _drops():
+            self.sensor.errorState = "no ack"
+            return orig()
+        self.p._quick_confirm_leak = _drops
+        self.p._check_leak_sensor()            # wet, then errors during the retest
+        self.assertFalse(self.p.alert_sent)
+        self.p._check_leak_sensor()
+        self.assertEqual(len(self._urgent_calls()), 1)
+
+    def test_failed_urgent_is_retried(self):
+        clock = {"t": 1000.0}
+        with patch.object(wlm._time, "monotonic", lambda: clock["t"]):
+            self.p._check_leak_sensor()
+            self.sensor.errorState = "no ack"
+            _ind.server.sendEmailTo.side_effect = RuntimeError("smtp down")
+            self.po.executeAction.side_effect = RuntimeError("pushover down")
+            self.p._check_leak_sensor()
+            self.assertTrue(self.p._wet_drop_pending)
+            _ind.server.sendEmailTo.side_effect = None
+            self.po.executeAction.side_effect = None
+            clock["t"] += wlm.ALERT_RETRY_BACKOFF
+            self.p._check_leak_sensor()
+            self.assertFalse(self.p._wet_drop_pending)
+        self.assertGreaterEqual(len(self._urgent_calls()), 1)
+
+    def test_back_and_still_wet_alerts_again(self):
+        self.p._check_leak_sensor()
+        self.sensor.errorState = "no ack"
+        self.p._check_leak_sensor()
+        self.sensor.errorState = None
+        self.p._check_leak_sensor()
+        self.assertTrue(self.p.alert_sent)
+        self.assertFalse(self.p._wet_drop_pending)
+
+
+class TestSensorChangeClearsLatch(unittest.TestCase):
+    """v1.11.0: switching to a different sensor clears the old alert latch."""
+
+    def test_new_wet_sensor_is_alerted(self):
+        _reset_server()
+        wlm.QUICK_RETEST_DELAY = 0
+        _ind.devices[SENSOR_ID] = FakeSensor(name="Old", states={"waterLeak": True})
+        _ind.devices[999] = FakeSensor(name="Kitchen", states={"waterLeak": True})
+        try:
+            p = make_plugin()
+            p._check_leak_sensor()
+            self.assertTrue(p.alert_sent)
+            _ind.server.sendEmailTo.reset_mock()
+            p.closedPrefsConfigUi({"leakSensorId": "999", "reAlertMinutes": "0",
+                                   "alertEmail": "x@example.com"}, False)
+            p._check_leak_sensor()
+            self.assertEqual(_ind.server.sendEmailTo.call_count, 1)
+            self.assertIn("Kitchen", _ind.server.sendEmailTo.call_args.kwargs["body"])
+        finally:
+            _ind.devices.pop(999, None)
+
+    def test_same_sensor_resave_keeps_latch(self):
+        _reset_server()
+        wlm.QUICK_RETEST_DELAY = 0
+        _ind.devices[SENSOR_ID] = FakeSensor(states={"waterLeak": True})
+        p = make_plugin()
+        p._check_leak_sensor()
+        p.closedPrefsConfigUi({"leakSensorId": str(SENSOR_ID), "reAlertMinutes": "0",
+                               "alertEmail": "x@example.com"}, False)
+        n = _ind.server.sendEmailTo.call_count
+        p._check_leak_sensor()
+        self.assertEqual(_ind.server.sendEmailTo.call_count, n)
+
+
+class TestAlertSettings(unittest.TestCase):
+    """v1.11.0: Pushover leak priority / sound and re-alert defaults."""
+
+    def setUp(self):
+        _reset_server()
+        wlm.QUICK_RETEST_DELAY = 0
+        _ind.devices[SENSOR_ID] = FakeSensor(states={"waterLeak": True})
+        self.po = _enabled_pushover()
+
+    def test_default_leak_alert_is_emergency_siren(self):
+        p = make_plugin()
+        p._check_leak_sensor()
+        props = self.po.executeAction.call_args.kwargs["props"]
+        self.assertEqual(props["msgPriority"], "2")
+        self.assertEqual(props["msgSound"], "siren")
+
+    def test_settings_are_honoured_and_junk_falls_back(self):
+        p = make_plugin()
+        p._apply_settings({"pushoverPriority": "1", "pushoverSound": "persistent"})
+        self.assertEqual((p.pushover_priority, p.pushover_sound), ("1", "persistent"))
+        p._apply_settings({"pushoverPriority": "0", "pushoverSound": "  "})
+        self.assertEqual((p.pushover_priority, p.pushover_sound), ("2", "siren"))
+
+    def test_realert_defaults(self):
+        p = make_plugin()
+        p._apply_settings({})
+        self.assertEqual(p.realert_minutes, 15, "never-saved -> 15")
+        p._apply_settings({"reAlertMinutes": "0"})
+        self.assertEqual(p.realert_minutes, 0, "a saved 0 is kept")
+        p._apply_settings({"reAlertMinutes": "-5"})
+        self.assertEqual(p.realert_minutes, 0)
+
+    def test_config_xml_defaults_match_code(self):
+        root = ET.parse(os.path.join(_HERE, "PluginConfig.xml")).getroot()
+        defaults = {f.get("id"): f.get("defaultValue") for f in root.iter("Field")}
+        self.assertEqual(defaults["reAlertMinutes"], str(wlm.DEFAULT_REALERT_MINUTES))
+        self.assertEqual(defaults["staleHours"], str(wlm.DEFAULT_STALE_HOURS))
+        self.assertEqual(defaults["lowBatteryPercent"], str(wlm.DEFAULT_LOW_BATTERY_PCT))
+        self.assertEqual(defaults["batteryStateName"], wlm.DEFAULT_BATTERY_STATE)
+        self.assertEqual(defaults["pushoverSound"], wlm.DEFAULT_PUSHOVER_SOUND)
+        self.assertEqual(defaults["pushoverPriority"], wlm.DEFAULT_PUSHOVER_PRIORITY)
 
 
 if __name__ == "__main__":

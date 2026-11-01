@@ -15,9 +15,10 @@ The plugin adds no devices, actions or triggers of its own. You point it at your
 
 - **Checks your leak sensor every two seconds**, whether it is a Zigbee sensor, a Z-Wave sensor or another kind that Indigo shows as on when it is wet.
 - **Checks a second time before it alerts**, five seconds later, so a sensor that reads wet for a moment and then dry again does not wake you for nothing.
-- **Sends a Pushover message and an email** naming the sensor and the time. The Pushover message goes at high priority and makes the phone vibrate.
+- **Sends a Pushover message and an email** naming the sensor and the time. The Pushover message goes at emergency priority with a siren sound, and Pushover repeats it every 10 minutes until you acknowledge it on your phone.
 - **Keeps trying if an alert cannot be sent.** If neither the email nor the Pushover message goes out, the plugin tries again every minute for as long as the sensor is wet, so a real leak is never lost because your mail was down.
-- **Can repeat the alert** every so many minutes while the sensor stays wet, if you ask it to.
+- **Repeats the alert** every 15 minutes while the sensor stays wet. You can change how often, or turn it off.
+- **Tells you when the sensor stops answering** — in error, disabled, deleted, or silent for 12 hours, which is what a flat battery usually looks like — and warns you when its battery is low.
 - **Sends a test alert** from the Plugins menu, so you can check your phone and inbox get it without pouring water on the sensor.
 - **Gets ready for the next leak** once the sensor reads dry again.
 

@@ -7,6 +7,16 @@ nav_order: 8
 
 The newest version is at the top.
 
+## 1.11.0 — 1 November 2026
+
+- **A sensor that goes quiet now counts as not answering.** If its **Last Changed** time in Indigo is older than 12 hours, you get the "not answering" message. A sensor with a flat battery usually shows no error in Indigo; it just stops reporting, and until now the plugin went on treating it as dry. The 12 hours is a new setting.
+- **Low battery warning.** If the sensor reports its battery to Indigo, you are told once a day while it is at or below 20%. Both the level and the battery state's name are new settings.
+- **A deleted sensor is reported to your phone.** If the sensor is deleted or re-created in Indigo, you now get the "not answering" Pushover message and email, not only a red line in the Event Log.
+- **A "not answering" message that could not be sent is tried again** every 5 minutes, instead of being counted as sent.
+- **A sensor that stops answering while wet sends an urgent message**, at the leak alert's priority and sound, telling you to go and look.
+- **Louder leak alerts that repeat.** The Pushover message now goes at emergency priority, which Pushover repeats every 10 minutes until you acknowledge it, with a siren sound instead of vibrate. The plugin also repeats both alerts every 15 minutes while the sensor is wet, instead of once. All three are settings. A value you had already saved, such as a re-alert of 0, is kept.
+- Choosing a different sensor in the settings now forgets that the old one had already been alerted, so a new sensor that is already wet is alerted.
+
 ## 1.10.0 — 27 September 2026
 
 - If your leak sensor stops answering Indigo, or you disable it, the plugin now tells you with a line in the Event Log, a Pushover message and an email. It tells you again when the sensor is back. A sensor that keeps dropping in and out sends no more than one of these every half an hour.
