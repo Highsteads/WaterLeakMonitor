@@ -23,48 +23,9 @@
         <Label>Email Subject:</Label>
     </Field>
 
-    <Field type="textfield" id="reAlertMinutes" defaultValue="15">
+    <Field type="textfield" id="reAlertMinutes" defaultValue="0">
         <Label>Re-alert every (minutes):</Label>
-        <Description>Re-send the alert this often while the sensor stays wet. 0 = alert once only.</Description>
-    </Field>
-
-    <Field type="menu" id="pushoverPriority" defaultValue="2">
-        <Label>Pushover leak priority:</Label>
-        <List>
-            <Option value="2">Emergency (repeats until acknowledged)</Option>
-            <Option value="1">High</Option>
-        </List>
-    </Field>
-    <Field id="label_pushoverPriority_info" type="label">
-        <Label>Emergency makes Pushover repeat the leak alert every 10 minutes, for up to 24 hours, until you tap Acknowledge in the Pushover app. High sends it once, and both get through Pushover's quiet hours.</Label>
-    </Field>
-
-    <Field type="textfield" id="pushoverSound" defaultValue="siren">
-        <Label>Pushover leak sound:</Label>
-        <Description>A Pushover sound name, such as siren, persistent or echo.</Description>
-    </Field>
-
-    <Field type="separator" id="sep3"/>
-
-    <Field type="textfield" id="staleHours" defaultValue="12">
-        <Label>Quiet sensor alarm after (hours):</Label>
-        <Description>0 = off.</Description>
-    </Field>
-    <Field id="label_staleHours_info" type="label">
-        <Label>If Indigo's Last Changed time for the sensor is older than this, the sensor counts as not answering and you are told. A flat battery usually looks like this: the sensor just stops reporting.</Label>
-    </Field>
-
-    <Field type="textfield" id="lowBatteryPercent" defaultValue="20">
-        <Label>Low battery warning at (%):</Label>
-        <Description>0 = off.</Description>
-    </Field>
-
-    <Field type="textfield" id="batteryStateName" defaultValue="batteryLevel">
-        <Label>Battery state name:</Label>
-        <Description>Blank = do not check the battery.</Description>
-    </Field>
-    <Field id="label_batteryStateName_info" type="label">
-        <Label>The name of the sensor's battery state in Indigo (look at the sensor's states in Indigo's main window). If the sensor has no state of this name, the battery is simply not checked.</Label>
+        <Description>If a confirmed leak keeps flowing, re-send the alert this often. 0 = alert once only (default).</Description>
     </Field>
 
     <Field type="separator" id="sep2"/>
