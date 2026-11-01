@@ -2,7 +2,7 @@
 
 **Watch a water leak sensor from Indigo, and get a Pushover message and an email the moment it finds water.**
 
-**Version:** 1.10.0 | **Author:** CliveS & Claude | **Needs:** Indigo 2022.1 or later, a leak sensor in Indigo, and the Pushover plugin or Email+ set up
+**Version:** 1.11.0 | **Author:** CliveS & Claude | **Needs:** Indigo 2022.1 or later, a leak sensor in Indigo, and the Pushover plugin or Email+ set up
 
 **[Read the full guide](https://highsteads.github.io/WaterLeakMonitor/)** — setting up, what the alerts look like, and what to do when something goes wrong.
 
@@ -14,10 +14,11 @@ This plugin lets [Indigo](https://www.indigodomo.com) keep watch on a water leak
 
 - **Checks your leak sensor every two seconds.**
 - **Checks a second time before it alerts,** five seconds later, so a sensor that reads wet for a moment does not wake you for nothing.
-- **Sends a Pushover message and an email** naming the sensor and the time. The Pushover message goes at high priority and makes the phone vibrate.
+- **Sends a Pushover message and an email** naming the sensor and the time. The Pushover message goes at emergency priority with a siren sound, and Pushover repeats it every 10 minutes until you acknowledge it. Both can be changed in the settings.
 - **Keeps trying if an alert cannot be sent.** If neither the email nor the Pushover message goes out, the plugin tries again every minute while the sensor is wet, so a real leak is never lost because your mail was down.
-- **Can repeat the alert** every so many minutes while the sensor stays wet.
-- **Tells you when the sensor stops answering,** and again when it is back, so a flat battery cannot leave the house unwatched without you knowing.
+- **Repeats the alert** every 15 minutes while the sensor stays wet. You can change how often, or turn it off.
+- **Tells you when the sensor stops answering,** and again when it is back. That covers a sensor Indigo shows in error, one that is disabled or deleted, and one that has reported nothing for 12 hours, which is what a flat battery usually looks like. If the sensor was wet when it stopped answering, the message is urgent.
+- **Warns you when the battery is low,** at 20% by default, if your sensor reports its battery to Indigo.
 - **Sends a test alert** from the Plugins menu, so you can check both reach you without a real leak.
 
 ## What it works with
@@ -43,6 +44,8 @@ You need at least one of Pushover and Email+, and I recommend both.
 The [full guide](https://highsteads.github.io/WaterLeakMonitor/) goes through each step, explains every setting, and covers what to do if something does not work.
 
 ## What's new
+
+**v1.11.0** — Harder to miss a leak. A sensor that goes quiet for 12 hours, or is deleted, now counts as not answering and you are told. A low battery is reported. A sensor that drops out while wet sends an urgent message. Leak alerts now go at Pushover emergency priority with a siren and repeat every 15 minutes. A setting you had already saved, such as a re-alert of 0, is kept.
 
 **v1.10.0** — The plugin now tells you when your leak sensor stops answering, and again when it is back. The sensor box in the settings starts empty instead of holding my own sensor's number.
 

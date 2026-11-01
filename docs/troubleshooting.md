@@ -49,13 +49,19 @@ Neither Email+ nor the Pushover plugin would take the alert. The Event Log lines
 
 ## I was told my leak sensor is not answering
 
-Indigo shows the sensor with an error, or it is disabled, so the plugin cannot see whether it is wet, and no leak alert can go out until it is back. Check its battery if it runs on one, and that the plugin it belongs to, such as Zigbee2MQTT or Z-Wave, is running. You get another message when the sensor answers again.
+Indigo shows the sensor with an error, or it is disabled, or it has been deleted, or it has reported nothing for longer than **Quiet sensor alarm after (hours)**. The message says which. The plugin cannot see whether it is wet, and no leak alert can go out until it is back. Check its battery if it runs on one, and that the plugin it belongs to, such as Zigbee2MQTT or Z-Wave, is running. You get another message when the sensor answers again.
+
+If the message says the sensor has been deleted or re-created, it now has a new ID: copy it again and paste it into **Leak Sensor Device ID**.
+
+If the message says no change was reported for some hours but the sensor is fine, it may simply report rarely. Look at its **Last Changed** time in Indigo over a day, and set **Quiet sensor alarm after (hours)** comfortably longer than the longest gap you see.
 
 If these messages come often, the sensor is dropping in and out. The plugin sends no more than one every half an hour, but it is worth moving the sensor closer to a repeater or fitting a fresh battery.
 
 ## I keep getting the same alert every few minutes
 
-**Re-alert every (minutes)** is set above nought, and the sensor is still wet. Once the sensor is dry the repeats stop. To have one alert per leak, set it to 0.
+**Re-alert every (minutes)** is set above nought (it starts at 15), and the sensor is still wet. Once the sensor is dry the repeats stop. To have one alert per leak, set it to 0.
+
+With **Pushover leak priority** set to Emergency, Pushover itself also repeats the message every 10 minutes until you tap Acknowledge in the Pushover app.
 
 ## Still stuck?
 
