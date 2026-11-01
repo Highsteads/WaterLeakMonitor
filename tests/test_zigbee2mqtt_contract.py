@@ -103,14 +103,40 @@ def test_the_back_notice_follows_the_bridge_returning(setup):
 
 # ── preferences read back from Indigo ───────────────────────────────────────
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Bug: plugin.py:156 reads timestampEnabled with bool(). A pref Indigo "
-    "hands back as the string 'false' is truthy, so the timestamps cannot be "
-    "turned off. plugin.py's own 1.9.1 note says exactly this, and "
-    "plugin_utils.as_bool() exists for it, but it is not used here."))
+def _plugin_with(monkeypatch, prefs):
+    monkeypatch.setattr(wlm, "install_timestamp_filter", None)
+    monkeypatch.setattr(wlm.Plugin, "logger", MagicMock(), raising=False)
+    return wlm.Plugin("id", "Water Leak Monitor", "1.10.1",
+                      {"alertEmail": "x@example.com", **prefs})
+
+
 def test_timestamp_pref_stored_as_the_string_false_is_off(monkeypatch):
+    """Fixed in 1.10.1: was bool(), so "false" read as on."""
     monkeypatch.setattr(wlm, "install_timestamp_filter", None)
     monkeypatch.setattr(wlm.Plugin, "logger", MagicMock(), raising=False)
     plugin = wlm.Plugin("id", "Water Leak Monitor", "1.10.0",
                         {"timestampEnabled": "false", "alertEmail": "x@example.com"})
     assert plugin.timestamp_enabled is False
+
+
+@pytest.mark.parametrize("stored,expected", [
+    (True, True), (False, False), ("true", True), ("false", False),
+    ("", True), (None, True), ("junk", True),
+])
+def test_timestamp_pref_reads(monkeypatch, stored, expected):
+    """Unset or unreadable keeps the default (on)."""
+    prefs = {} if stored is None else {"timestampEnabled": stored}
+    assert _plugin_with(monkeypatch, prefs).timestamp_enabled is expected
+
+
+@pytest.mark.parametrize("stored,expected", [
+    (True, True), (False, False), ("true", True), ("false", False), ("", False),
+])
+def test_debug_pref_reads(monkeypatch, stored, expected):
+    assert _plugin_with(monkeypatch, {"showDebugInfo": stored}).debug is expected
+
+
+def test_debug_pref_from_the_configure_dialog(monkeypatch):
+    plugin = _plugin_with(monkeypatch, {})
+    plugin.closedPrefsConfigUi({"showDebugInfo": "false", "leakSensorId": ""}, False)
+    assert plugin.debug is False
